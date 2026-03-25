@@ -14,8 +14,8 @@ import {
   type ProcessingJobRecord
 } from '@document-parser/document-processing-domain';
 import {
+  DEFAULT_PROCESSING_QUEUE_NAME,
   ErrorCode,
-  FatalFailureError,
   JobStatus,
   RedactionPolicyService,
   RetentionPolicyService,
@@ -96,19 +96,38 @@ export class ProcessJobMessageUseCase {
         }
       },
       async () => {
-        const now = this.clock.now();
-        const job = await this.jobs.findById(message.jobId);
-        const document = await this.documents.findById(message.documentId);
-        const attempt = await this.attempts.findById(message.attemptId);
-
-        if (job === undefined || document === undefined || attempt === undefined) {
-          throw new FatalFailureError('Worker context is incomplete', {
-            jobId: message.jobId,
-            documentId: message.documentId,
-            attemptId: message.attemptId
+        const context = await this.resolveMessageContext(message);
+        if (context.missingResources.length > 0) {
+          const now = this.clock.now();
+          await this.handleIncompleteContext({
+            message,
+            ...context,
+            now
           });
+          await this.metrics.increment({
+            name: 'worker.process_job_message.failed',
+            traceId: message.traceId
+          });
+          await this.logging.log({
+            level: 'error',
+            message: 'Processing moved to dead letter due to incomplete worker context',
+            context: 'ProcessJobMessageUseCase',
+            traceId: message.traceId,
+            data: this.redactionPolicy.redact({
+              jobId: message.jobId,
+              attemptId: message.attemptId,
+              documentId: message.documentId,
+              missingResources: context.missingResources
+            }) as Record<string, unknown>,
+            recordedAt: this.clock.now()
+          });
+          throw new MessageMovedToDeadLetterError('Worker context is incomplete');
         }
 
+        const job = context.job as ProcessingJobRecord;
+        const document = context.document as NonNullable<Awaited<ReturnType<DocumentRepositoryPort['findById']>>>;
+        const attempt = context.attempt as JobAttemptRecord;
+        const now = this.clock.now();
         const started = startPendingAttempt({
           job,
           attempt,
@@ -256,6 +275,31 @@ export class ProcessJobMessageUseCase {
     );
   }
 
+  private async resolveMessageContext(message: ProcessingJobRequestedMessage): Promise<{
+    job?: ProcessingJobRecord;
+    document?: Awaited<ReturnType<DocumentRepositoryPort['findById']>>;
+    attempt?: JobAttemptRecord;
+    missingResources: string[];
+  }> {
+    const [job, document, attempt] = await Promise.all([
+      this.jobs.findById(message.jobId),
+      this.documents.findById(message.documentId),
+      this.attempts.findById(message.attemptId)
+    ]);
+    const missingResources = [
+      job === undefined ? 'job' : undefined,
+      document === undefined ? 'document' : undefined,
+      attempt === undefined ? 'attempt' : undefined
+    ].filter((resource): resource is string => resource !== undefined);
+
+    return {
+      job,
+      document,
+      attempt,
+      missingResources
+    };
+  }
+
   private async handleFailure(input: {
     error: unknown;
     message: ProcessingJobRequestedMessage;
@@ -370,6 +414,77 @@ export class ProcessJobMessageUseCase {
     throw new MessageMovedToDeadLetterError(buildFailureMessage(input.error));
   }
 
+  private async handleIncompleteContext(input: {
+    message: ProcessingJobRequestedMessage;
+    job?: ProcessingJobRecord;
+    attempt?: JobAttemptRecord;
+    document?: Awaited<ReturnType<DocumentRepositoryPort['findById']>>;
+    missingResources: string[];
+    now: Date;
+  }): Promise<void> {
+    const reasonMessage = 'Worker context is incomplete';
+    const payloadSnapshot = {
+      jobId: input.message.jobId,
+      attemptId: input.message.attemptId,
+      documentId: input.message.documentId,
+      missingResources: input.missingResources
+    };
+
+    if (input.job !== undefined && input.attempt !== undefined) {
+      await this.persistDeadLetter({
+        traceId: input.message.traceId,
+        job: input.job,
+        attempt: {
+          ...input.attempt,
+          errorCode: ErrorCode.FATAL_FAILURE,
+          errorDetails: {
+            ...(input.attempt.errorDetails ?? {}),
+            message: reasonMessage,
+            missingResources: input.missingResources
+          }
+        },
+        reasonCode: ErrorCode.FATAL_FAILURE,
+        reasonMessage,
+        payloadSnapshot,
+        auditMetadata: {
+          missingResources: input.missingResources
+        },
+        now: input.now
+      });
+      return;
+    }
+
+    await this.unitOfWork.runInTransaction(async () => {
+      await this.deadLetters.save({
+        dlqEventId: this.idGenerator.next('dlq'),
+        jobId: input.message.jobId,
+        attemptId: input.message.attemptId,
+        traceId: input.message.traceId,
+        queueName: input.job?.queueName ?? DEFAULT_PROCESSING_QUEUE_NAME,
+        reasonCode: ErrorCode.FATAL_FAILURE,
+        reasonMessage,
+        retryCount: input.attempt?.attemptNumber ?? 0,
+        payloadSnapshot: this.redactionPolicy.redact(payloadSnapshot) as Record<string, unknown>,
+        firstSeenAt: input.now,
+        lastSeenAt: input.now,
+        retentionUntil: this.retentionPolicy.calculateDeadLetterRetentionUntil(input.now)
+      });
+      await this.recordAuditEvent({
+        eventType: 'PROCESSING_FAILED',
+        traceId: input.message.traceId,
+        metadata: {
+          jobId: input.message.jobId,
+          attemptId: input.message.attemptId,
+          documentId: input.message.documentId,
+          errorCode: ErrorCode.FATAL_FAILURE,
+          errorMessage: reasonMessage,
+          missingResources: input.missingResources
+        },
+        createdAt: input.now
+      });
+    });
+  }
+
   private async persistDeadLetter(input: {
     traceId: string;
     job: ProcessingJobRecord;
@@ -377,6 +492,7 @@ export class ProcessJobMessageUseCase {
     reasonCode: ErrorCode.DLQ_ERROR | ErrorCode.FATAL_FAILURE | ErrorCode.TIMEOUT;
     reasonMessage: string;
     payloadSnapshot: Record<string, unknown>;
+    auditMetadata?: Record<string, unknown>;
     previousAttempts?: JobAttemptRecord[];
     now: Date;
   }): Promise<void> {
@@ -387,7 +503,7 @@ export class ProcessJobMessageUseCase {
       queueName: input.job.queueName,
       reasonCode: input.reasonCode,
       reasonMessage: input.reasonMessage,
-      payloadSnapshot: this.redactionPolicy.redact(input.payloadSnapshot) as Record<string, unknown>,
+      payloadSnapshot: this.redactionPolicy.redact(input.payloadSnapshot),
       deadLetterEventId: this.idGenerator.next('dlq'),
       retentionUntil: this.retentionPolicy.calculateDeadLetterRetentionUntil(input.now),
       now: input.now
@@ -409,7 +525,8 @@ export class ProcessJobMessageUseCase {
           jobId: moved.job.jobId,
           attemptId: moved.attempt.attemptId,
           errorCode: input.reasonCode,
-          errorMessage: input.reasonMessage
+          errorMessage: input.reasonMessage,
+          ...(input.auditMetadata ?? {})
         },
         createdAt: input.now
       });
@@ -437,7 +554,7 @@ export class ProcessJobMessageUseCase {
         input.redactedPayload ??
         (input.metadata === undefined
           ? undefined
-          : (this.redactionPolicy.redact(input.metadata) as Record<string, unknown>)),
+          : this.redactionPolicy.redact(input.metadata)),
       createdAt: input.createdAt,
       retentionUntil: this.retentionPolicy.calculateAuditRetentionUntil(input.createdAt)
     });
