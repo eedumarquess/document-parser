@@ -1,7 +1,13 @@
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
-import { DEFAULT_OUTPUT_VERSION, DEFAULT_PIPELINE_VERSION, JobStatus, Role } from '@document-parser/shared-kernel';
+import {
+  DEFAULT_OUTPUT_VERSION,
+  DEFAULT_PIPELINE_VERSION,
+  ExtractionWarning,
+  JobStatus,
+  Role
+} from '@document-parser/shared-kernel';
 import { FixedClock, IncrementalIdGenerator, createPdfBuffer } from '@document-parser/testkit';
 import { OrchestratorApiModule } from '../../src/app.module';
 import { InMemoryJobPublisherAdapter } from '../../src/adapters/out/queue/in-memory-job-publisher.adapter';
@@ -52,13 +58,13 @@ describe('Document jobs e2e', () => {
 
       const original = await storage.read(document.storageReference);
       const rawText = original.toString('utf8').trim();
-      const payload = rawText.includes('[[ILLEGIBLE]]') ? '[ilegível]' : rawText;
-      const status = payload.includes('[ilegível]') ? JobStatus.PARTIAL : JobStatus.COMPLETED;
+      const payload = rawText.includes('[[ILLEGIBLE]]') ? '[ilegivel]' : rawText;
+      const status = payload.includes('[ilegivel]') ? JobStatus.PARTIAL : JobStatus.COMPLETED;
 
       await jobs.save({
         ...job,
         status,
-        warnings: status === JobStatus.PARTIAL ? ['ILLEGIBLE_CONTENT'] : [],
+        warnings: status === JobStatus.PARTIAL ? [ExtractionWarning.ILLEGIBLE_CONTENT] : [],
         finishedAt: clock.now(),
         updatedAt: clock.now()
       });
@@ -72,7 +78,7 @@ describe('Document jobs e2e', () => {
         pipelineVersion: DEFAULT_PIPELINE_VERSION,
         outputVersion: DEFAULT_OUTPUT_VERSION,
         confidence: status === JobStatus.COMPLETED ? 0.98 : 0.62,
-        warnings: status === JobStatus.PARTIAL ? ['ILLEGIBLE_CONTENT'] : [],
+        warnings: status === JobStatus.PARTIAL ? [ExtractionWarning.ILLEGIBLE_CONTENT] : [],
         payload,
         engineUsed: 'OCR',
         totalLatencyMs: 900,
@@ -137,7 +143,7 @@ describe('Document jobs e2e', () => {
     });
   });
 
-  it('returns PARTIAL with [ilegível] when the pipeline marks content as illegible', async () => {
+  it('returns PARTIAL with [ilegivel] when the pipeline marks content as illegible', async () => {
     const createResponse = await request(app.getHttpServer())
       .post('/v1/parsing/jobs')
       .set('x-role', Role.OWNER)
@@ -153,7 +159,7 @@ describe('Document jobs e2e', () => {
       .set('x-role', Role.OPERATOR);
 
     expect(resultResponse.body.status).toBe('PARTIAL');
-    expect(resultResponse.body.payload).toContain('[ilegível]');
+    expect(resultResponse.body.payload).toContain('[ilegivel]');
   });
 
   it('allows OPERATOR to read but blocks reprocessing', async () => {
