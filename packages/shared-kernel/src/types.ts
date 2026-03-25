@@ -1,4 +1,5 @@
 import type { AttemptStatus, JobStatus, Role } from './enums';
+import type { ExtractionWarning, FallbackReason } from './constants';
 
 export type VersionStamp = {
   pipelineVersion: string;
@@ -22,7 +23,7 @@ export type ProcessingJobRequestedMessage = {
   publishedAt: string;
 };
 
-export type JobWarning = string;
+export type JobWarning = ExtractionWarning;
 
 export type ArtifactReference = {
   artifactId: string;
@@ -42,6 +43,7 @@ export type ProcessingOutcome = {
   payload: string;
   artifacts: ArtifactReference[];
   fallbackUsed: boolean;
+  fallbackReason?: FallbackReason;
   promptVersion?: string;
   modelVersion?: string;
   normalizationVersion?: string;
