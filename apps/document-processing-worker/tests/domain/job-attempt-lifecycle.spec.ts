@@ -115,11 +115,13 @@ describe('Job attempt lifecycle', () => {
     const moved = moveFailedAttemptToDeadLetter({
       job: started.job,
       attempt: failed,
+      traceId: 'trace-dlq-1',
       queueName: DEFAULT_PROCESSING_QUEUE_NAME,
       reasonCode: ErrorCode.DLQ_ERROR,
       reasonMessage: 'retries exhausted',
       payloadSnapshot: { jobId: job.jobId, attemptId: failed.attemptId },
       deadLetterEventId: 'dlq-1',
+      retentionUntil: new Date('2026-09-21T12:00:00.000Z'),
       now
     });
 
