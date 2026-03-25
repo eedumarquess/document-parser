@@ -77,7 +77,8 @@ export class InMemoryJobAttemptRepository implements JobAttemptRepositoryPort {
 export class InMemoryProcessingResultRepository
   implements ProcessingResultRepositoryPort, CompatibleResultLookupPort
 {
-  private readonly results = new Map<string, ProcessingResultRecord>();
+  private readonly resultsByJobId = new Map<string, ProcessingResultRecord>();
+  private readonly jobIdByResultId = new Map<string, string>();
 
   public async findByCompatibilityKey(input: {
     hash: string;
@@ -92,7 +93,7 @@ export class InMemoryProcessingResultRepository
       outputVersion: input.outputVersion
     });
 
-    return [...this.results.values()]
+    return [...this.resultsByJobId.values()]
       .filter(
         (result) =>
           result.compatibilityKey === compatibilityKey &&
@@ -102,11 +103,23 @@ export class InMemoryProcessingResultRepository
   }
 
   public async findByJobId(jobId: string): Promise<ProcessingResultRecord | undefined> {
-    return [...this.results.values()].find((result) => result.jobId === jobId);
+    return this.resultsByJobId.get(jobId);
   }
 
   public async save(result: ProcessingResultRecord): Promise<void> {
-    this.results.set(result.resultId, result);
+    const existingJobIdForResultId = this.jobIdByResultId.get(result.resultId);
+    if (existingJobIdForResultId !== undefined && existingJobIdForResultId !== result.jobId) {
+      this.resultsByJobId.delete(existingJobIdForResultId);
+      this.jobIdByResultId.delete(result.resultId);
+    }
+
+    const existingResultForJob = this.resultsByJobId.get(result.jobId);
+    if (existingResultForJob !== undefined && existingResultForJob.resultId !== result.resultId) {
+      this.jobIdByResultId.delete(existingResultForJob.resultId);
+    }
+
+    this.resultsByJobId.set(result.jobId, result);
+    this.jobIdByResultId.set(result.resultId, result.jobId);
   }
 }
 

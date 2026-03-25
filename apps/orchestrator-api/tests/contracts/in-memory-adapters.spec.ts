@@ -1,4 +1,6 @@
+import { JobStatus } from '@document-parser/shared-kernel';
 import { InMemoryJobPublisherAdapter } from '../../src/adapters/out/queue/in-memory-job-publisher.adapter';
+import { InMemoryProcessingResultRepository } from '../../src/adapters/out/repositories/in-memory.repositories';
 import { InMemoryBinaryStorageAdapter } from '../../src/adapters/out/storage/in-memory-binary-storage.adapter';
 import { SimplePageCounterAdapter } from '../../src/adapters/out/storage/simple-page-counter.adapter';
 
@@ -106,5 +108,52 @@ describe('In-memory adapter contracts', () => {
         buffer: Buffer.from('%PDF-1.4\n/Type /Page\n/Type /Page\nhello')
       })
     ).resolves.toBe(2);
+  });
+
+  it('keeps a single logical processing result per jobId', async () => {
+    const repository = new InMemoryProcessingResultRepository();
+
+    await repository.save({
+      resultId: 'result-1',
+      jobId: 'job-1',
+      documentId: 'doc-1',
+      compatibilityKey: 'compatibility-1',
+      status: JobStatus.COMPLETED,
+      requestedMode: 'STANDARD',
+      pipelineVersion: 'git-sha',
+      outputVersion: '1.0.0',
+      confidence: 0.8,
+      warnings: [],
+      payload: 'old payload',
+      engineUsed: 'OCR',
+      totalLatencyMs: 100,
+      createdAt: new Date('2026-03-25T12:00:00.000Z'),
+      updatedAt: new Date('2026-03-25T12:00:00.000Z'),
+      retentionUntil: new Date('2026-06-23T12:00:00.000Z')
+    });
+    await repository.save({
+      resultId: 'result-2',
+      jobId: 'job-1',
+      documentId: 'doc-1',
+      compatibilityKey: 'compatibility-1',
+      status: JobStatus.PARTIAL,
+      requestedMode: 'STANDARD',
+      pipelineVersion: 'git-sha',
+      outputVersion: '1.0.0',
+      confidence: 0.9,
+      warnings: ['ILLEGIBLE_CONTENT'],
+      payload: 'new payload',
+      engineUsed: 'OCR+LLM',
+      totalLatencyMs: 120,
+      createdAt: new Date('2026-03-25T12:01:00.000Z'),
+      updatedAt: new Date('2026-03-25T12:01:00.000Z'),
+      retentionUntil: new Date('2026-06-23T12:01:00.000Z')
+    });
+
+    await expect(repository.findByJobId('job-1')).resolves.toMatchObject({
+      resultId: 'result-2',
+      payload: 'new payload',
+      status: JobStatus.PARTIAL
+    });
   });
 });

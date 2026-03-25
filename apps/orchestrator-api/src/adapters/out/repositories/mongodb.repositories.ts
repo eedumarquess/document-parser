@@ -236,7 +236,7 @@ export class MongoProcessingResultRepositoryAdapter
   public async save(result: ProcessingResultRecord): Promise<void> {
     const collection = await this.getCollection();
     await collection.replaceOne(
-      { resultId: result.resultId },
+      { jobId: result.jobId },
       result,
       { upsert: true, session: this.getSession() }
     );
@@ -248,7 +248,7 @@ export class MongoProcessingResultRepositoryAdapter
     if (!this.indexesEnsured) {
       await collection.createIndexes([
         { key: { resultId: 1 }, unique: true },
-        { key: { jobId: 1 } },
+        { key: { jobId: 1 }, unique: true },
         { key: { compatibilityKey: 1, createdAt: -1 } },
         { key: { documentId: 1 } },
         { key: { status: 1 } },
