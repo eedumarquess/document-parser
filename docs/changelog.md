@@ -4,6 +4,34 @@ Todas as mudancas relevantes deste repositorio devem ser registradas aqui.
 
 O formato segue uma adaptacao simples de `Keep a Changelog` e usa as tags de contexto dos commits como apoio para rastreabilidade.
 
+## [2026-03-25] - Result Delivery MVP endurecido na orchestrator-api
+
+### Added
+
+- Suite dedicada de aplicacao para `GetJobStatusUseCase` e `GetProcessingResultUseCase`, cobrindo RBAC de leitura, `NOT_FOUND`, `PARTIAL`, `reusedResult` e auditoria `RESULT_QUERIED`.
+- Cobertura adicional de aplicacao para `ReprocessDocumentUseCase`, incluindo validacao de `reason`, job inexistente, restricao para `OPERATOR` e verificacao do novo `JobAttempt`.
+- Novos cenarios E2E para o envelope HTTP de erro, defaults de `x-actor-id` e `x-role` e reprocessamento bem-sucedido sem sobrescrever o historico anterior.
+
+### Changed
+
+- O contrato interno HTTP da API passou a declarar explicitamente `HttpErrorResponse` com `errorCode`, `message` e `metadata?`, preservando o wire format ja exposto.
+
+### Fixed
+
+- `DocumentJobsController` passou a montar respostas de erro por um unico caminho tipado para `VALIDATION_ERROR`, `NOT_FOUND`, `AUTHORIZATION_ERROR` e falhas inesperadas.
+
+### Technical Notes
+
+- Nenhum endpoint novo foi introduzido e os contratos `JobResponse` e `ResultResponse` permaneceram minimos.
+- `GET /result` continua retornando `404 NOT_FOUND` quando o job existe mas ainda nao ha `ProcessingResult` persistido, inclusive para jobs `FAILED`.
+
+### Commit Contexts
+
+- `bug(orchestrator-http)`
+- `feat(orchestrator-tests-application)`
+- `feat(orchestrator-tests-e2e)`
+- `docs(changelog)`
+
 ## [2026-03-25] - OCR/LLM Extraction MVP no worker
 
 ### Added
