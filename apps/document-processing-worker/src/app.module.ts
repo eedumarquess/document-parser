@@ -48,11 +48,20 @@ export type WorkerProviderOverrides = Partial<{
 
 @Module({})
 export class DocumentProcessingWorkerModule {
-  public static register(overrides: WorkerProviderOverrides): DynamicModule {
+  public static register(overrides: WorkerProviderOverrides = {}): DynamicModule {
     const providers: Provider[] = [
       { provide: TOKENS.CLOCK, useValue: overrides.clock ?? new SystemClockAdapter() },
       { provide: TOKENS.ID_GENERATOR, useValue: overrides.idGenerator ?? new RandomIdGeneratorAdapter() },
-      { provide: TOKENS.STORAGE, useValue: overrides.storage },
+      {
+        provide: TOKENS.STORAGE,
+        useValue:
+          overrides.storage ??
+          ({
+            async read(): Promise<Buffer> {
+              return Buffer.alloc(0);
+            }
+          } satisfies BinaryStoragePort)
+      },
       { provide: TOKENS.DOCUMENT_REPOSITORY, useValue: overrides.documents ?? new InMemoryDocumentRepository() },
       { provide: TOKENS.JOB_REPOSITORY, useValue: overrides.jobs ?? new InMemoryProcessingJobRepository() },
       { provide: TOKENS.ATTEMPT_REPOSITORY, useValue: overrides.attempts ?? new InMemoryJobAttemptRepository() },
@@ -66,7 +75,16 @@ export class DocumentProcessingWorkerModule {
         useValue: overrides.deadLetters ?? new InMemoryDeadLetterRepository()
       },
       { provide: TOKENS.AUDIT, useValue: overrides.audit ?? new InMemoryAuditRepository() },
-      { provide: TOKENS.JOB_PUBLISHER, useValue: overrides.publisher },
+      {
+        provide: TOKENS.JOB_PUBLISHER,
+        useValue:
+          overrides.publisher ??
+          ({
+            async publish(): Promise<void> {
+              return;
+            }
+          } satisfies JobPublisherPort)
+      },
       ProcessingOutcomePolicy,
       RetryPolicyService,
       {
@@ -86,4 +104,3 @@ export class DocumentProcessingWorkerModule {
     };
   }
 }
-
