@@ -1,5 +1,17 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  VersionStampService,
+  createPendingAttempt,
+  createReprocessingJob,
+  markAttemptAsQueued,
+  markJobAsQueued,
+  markJobAsStored,
+  markJobAsValidated,
+  recordJobError,
+  type JobAttemptRecord
+} from '@document-parser/document-processing-domain';
+import {
+  DEFAULT_PROCESSING_QUEUE_NAME,
   ErrorCode,
   NotFoundError,
   TransientFailureError,
@@ -20,11 +32,12 @@ import type {
   UnitOfWorkPort
 } from '../../contracts/ports';
 import { TOKENS } from '../../contracts/tokens';
-import { ProcessingJobEntity } from '../../domain/entities/processing-job.entity';
 import type { ReprocessDocumentCommand } from '../commands/reprocess-document.command';
 
 @Injectable()
 export class ReprocessDocumentUseCase {
+  private readonly versionStamps = new VersionStampService();
+
   public constructor(
     @Inject(TOKENS.AUTHORIZATION) private readonly authorization: AuthorizationPort,
     @Inject(TOKENS.CLOCK) private readonly clock: ClockPort,
@@ -48,19 +61,39 @@ export class ReprocessDocumentUseCase {
     }
 
     const now = this.clock.now();
-    const reprocessedJob = ProcessingJobEntity.createReprocessed({
-      jobId: this.idGenerator.next('job'),
-      documentId: originalJob.documentId,
-      requestedMode: originalJob.requestedMode,
+    const { pipelineVersion, outputVersion } = this.versionStamps.buildJobStamp({
       pipelineVersion: originalJob.pipelineVersion,
-      outputVersion: originalJob.outputVersion,
-      requestedBy: actor,
-      reprocessOfJobId: originalJob.jobId,
+      outputVersion: originalJob.outputVersion
+    });
+    const validatedJob = markJobAsValidated({
+      job: createReprocessingJob({
+        jobId: this.idGenerator.next('job'),
+        documentId: originalJob.documentId,
+        requestedMode: originalJob.requestedMode,
+        queueName: DEFAULT_PROCESSING_QUEUE_NAME,
+        pipelineVersion,
+        outputVersion,
+        requestedBy: actor,
+        reprocessOfJobId: originalJob.jobId,
+        now
+      }),
+      now
+    });
+    const reprocessedJob = markJobAsStored({
+      job: validatedJob,
+      now
+    });
+    const attempt = createPendingAttempt({
+      attemptId: this.idGenerator.next('attempt'),
+      jobId: reprocessedJob.jobId,
+      attemptNumber: 1,
+      pipelineVersion: reprocessedJob.pipelineVersion,
       now
     });
 
     await this.unitOfWork.runInTransaction(async () => {
       await this.jobs.save(reprocessedJob);
+      await this.attempts.save(attempt);
       await this.audit.record({
         eventId: this.idGenerator.next('audit'),
         eventType: 'JOB_REPROCESSING_REQUESTED',
@@ -73,19 +106,17 @@ export class ReprocessDocumentUseCase {
         createdAt: now
       });
     });
-
-    const attemptId = this.idGenerator.next('attempt');
     const message: ProcessingJobRequestedMessage = {
       documentId: originalJob.documentId,
       jobId: reprocessedJob.jobId,
-      attemptId,
+      attemptId: attempt.attemptId,
       requestedMode: originalJob.requestedMode,
       pipelineVersion: originalJob.pipelineVersion,
       publishedAt: now.toISOString()
     };
 
     try {
-      await this.publisher.publish(message);
+      await this.publisher.publishRequested(message);
     } catch (error) {
       await this.markJobAsPublishFailed({
         actor,
@@ -99,21 +130,17 @@ export class ReprocessDocumentUseCase {
       });
     }
 
-    const queuedJob = ProcessingJobEntity.markQueued({
+    const queuedJob = markJobAsQueued({
       job: reprocessedJob,
       now
     });
-    const attempt = ProcessingJobEntity.createAttempt({
-      attemptId,
-      jobId: queuedJob.jobId,
-      attemptNumber: 1,
-      pipelineVersion: queuedJob.pipelineVersion,
-      now
+    const queuedAttempt = markAttemptAsQueued({
+      attempt
     });
 
     await this.unitOfWork.runInTransaction(async () => {
       await this.jobs.save(queuedJob);
-      await this.attempts.save(attempt);
+      await this.attempts.save(queuedAttempt);
       await this.audit.record({
         eventId: this.idGenerator.next('audit'),
         eventType: 'PROCESSING_JOB_QUEUED',
@@ -121,7 +148,7 @@ export class ReprocessDocumentUseCase {
         metadata: {
           jobId: queuedJob.jobId,
           reprocessOfJobId: originalJob.jobId,
-          attemptId
+          attemptId: queuedAttempt.attemptId
         },
         createdAt: now
       });
@@ -145,13 +172,15 @@ export class ReprocessDocumentUseCase {
     now: Date;
     errorMessage: string;
   }): Promise<void> {
+    const failedJob = recordJobError({
+      job: input.job,
+      errorCode: ErrorCode.TRANSIENT_FAILURE,
+      errorMessage: input.errorMessage,
+      now: input.now
+    });
+
     await this.unitOfWork.runInTransaction(async () => {
-      await this.jobs.save({
-        ...input.job,
-        errorCode: ErrorCode.TRANSIENT_FAILURE,
-        errorMessage: input.errorMessage,
-        updatedAt: input.now
-      });
+      await this.jobs.save(failedJob);
       await this.audit.record({
         eventId: this.idGenerator.next('audit'),
         eventType: 'PROCESSING_JOB_QUEUEING_FAILED',

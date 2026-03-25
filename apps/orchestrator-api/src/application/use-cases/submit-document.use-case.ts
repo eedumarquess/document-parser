@@ -1,5 +1,18 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  VersionStampService,
+  createDeduplicatedJob,
+  createPendingAttempt,
+  createSubmissionJob,
+  markAttemptAsQueued,
+  markJobAsQueued,
+  markJobAsStored,
+  markJobAsValidated,
+  recordJobError,
+  type JobAttemptRecord
+} from '@document-parser/document-processing-domain';
+import {
+  DEFAULT_PROCESSING_QUEUE_NAME,
   DEFAULT_OUTPUT_VERSION,
   DEFAULT_PIPELINE_VERSION,
   ErrorCode,
@@ -9,7 +22,6 @@ import {
   type ProcessingJobRequestedMessage,
   ValidationError
 } from '@document-parser/shared-kernel';
-import { ProcessingJobEntity } from '../../domain/entities/processing-job.entity';
 import { CompatibleResultReusePolicy } from '../../domain/policies/compatible-result-reuse.policy';
 import { DocumentAcceptancePolicy } from '../../domain/policies/document-acceptance.policy';
 import { DocumentStoragePolicy } from '../../domain/policies/document-storage.policy';
@@ -39,6 +51,8 @@ import type { SubmitDocumentCommand } from '../commands/submit-document.command'
 
 @Injectable()
 export class SubmitDocumentUseCase {
+  private readonly versionStamps = new VersionStampService();
+
   public constructor(
     @Inject(TOKENS.AUTHORIZATION) private readonly authorization: AuthorizationPort,
     @Inject(TOKENS.CLOCK) private readonly clock: ClockPort,
@@ -71,8 +85,10 @@ export class SubmitDocumentUseCase {
     const hash = await this.calculateDocumentHash(command);
     const now = this.clock.now();
     const requestedMode = command.requestedMode;
-    const pipelineVersion = DEFAULT_PIPELINE_VERSION;
-    const outputVersion = DEFAULT_OUTPUT_VERSION;
+    const { pipelineVersion, outputVersion } = this.versionStamps.buildJobStamp({
+      pipelineVersion: DEFAULT_PIPELINE_VERSION,
+      outputVersion: DEFAULT_OUTPUT_VERSION
+    });
     const existingDocument = await this.findExistingDocumentByHash(hash);
     const compatibilityKey = this.buildCompatibilityKey({
       hash,
@@ -108,7 +124,7 @@ export class SubmitDocumentUseCase {
       pageCount,
       now
     });
-    const storedJob = await this.persistAcceptedSubmission({
+    const persistedSubmission = await this.persistAcceptedSubmission({
       actor,
       document: canonicalDocument.document,
       storedNewBinary: canonicalDocument.storedNewBinary,
@@ -118,13 +134,12 @@ export class SubmitDocumentUseCase {
       forceReprocess: command.forceReprocess,
       now
     });
-    const attemptId = this.idGenerator.next('attempt');
 
     try {
       await this.publishProcessingJobRequested({
         documentId: canonicalDocument.document.documentId,
-        jobId: storedJob.jobId,
-        attemptId,
+        jobId: persistedSubmission.job.jobId,
+        attemptId: persistedSubmission.attempt.attemptId,
         requestedMode,
         pipelineVersion,
         publishedAt: now.toISOString()
@@ -132,20 +147,20 @@ export class SubmitDocumentUseCase {
     } catch (error) {
       await this.markJobAsPublishFailed({
         actor,
-        job: storedJob,
+        job: persistedSubmission.job,
         now,
         errorMessage: this.buildPublishErrorMessage(error)
       });
       throw new TransientFailureError('Processing job persisted but queue publication failed', {
-        jobId: storedJob.jobId,
-        documentId: storedJob.documentId
+        jobId: persistedSubmission.job.jobId,
+        documentId: persistedSubmission.job.documentId
       });
     }
 
     const queuedJob = await this.finalizeQueuedJob({
       actor,
-      job: storedJob,
-      attemptId,
+      job: persistedSubmission.job,
+      attempt: persistedSubmission.attempt,
       now
     });
 
@@ -240,33 +255,32 @@ export class SubmitDocumentUseCase {
     outputVersion: string;
     forceReprocess: boolean;
     now: Date;
-  }): Promise<ProcessingJobRecord> {
-    const job = input.forceReprocess
-      ? ProcessingJobEntity.createReprocessed({
-          jobId: this.idGenerator.next('job'),
-          documentId: input.document.documentId,
-          requestedMode: input.requestedMode,
-          pipelineVersion: input.pipelineVersion,
-          outputVersion: input.outputVersion,
-          requestedBy: input.actor,
-          now: input.now,
-          transitions: [
-            { status: JobStatus.RECEIVED, at: input.now },
-            { status: JobStatus.VALIDATED, at: input.now },
-            { status: JobStatus.STORED, at: input.now },
-            { status: JobStatus.REPROCESSED, at: input.now }
-          ]
-        })
-      : ProcessingJobEntity.createStored({
-          jobId: this.idGenerator.next('job'),
-          documentId: input.document.documentId,
-          requestedMode: input.requestedMode,
-          pipelineVersion: input.pipelineVersion,
-          outputVersion: input.outputVersion,
-          requestedBy: input.actor,
-          forceReprocess: false,
-          now: input.now
-        });
+  }): Promise<{ job: ProcessingJobRecord; attempt: JobAttemptRecord }> {
+    const validatedJob = markJobAsValidated({
+      job: createSubmissionJob({
+        jobId: this.idGenerator.next('job'),
+        documentId: input.document.documentId,
+        requestedMode: input.requestedMode,
+        queueName: DEFAULT_PROCESSING_QUEUE_NAME,
+        pipelineVersion: input.pipelineVersion,
+        outputVersion: input.outputVersion,
+        requestedBy: input.actor,
+        forceReprocess: input.forceReprocess,
+        now: input.now
+      }),
+      now: input.now
+    });
+    const job = markJobAsStored({
+      job: validatedJob,
+      now: input.now
+    });
+    const attempt = createPendingAttempt({
+      attemptId: this.idGenerator.next('attempt'),
+      jobId: job.jobId,
+      attemptNumber: 1,
+      pipelineVersion: job.pipelineVersion,
+      now: input.now
+    });
 
     try {
       await this.unitOfWork.runInTransaction(async () => {
@@ -285,6 +299,7 @@ export class SubmitDocumentUseCase {
         }
 
         await this.jobs.save(job);
+        await this.attempts.save(attempt);
         await this.audit.record({
           eventId: this.idGenerator.next('audit'),
           eventType: 'DOCUMENT_ACCEPTED',
@@ -305,34 +320,30 @@ export class SubmitDocumentUseCase {
       throw error;
     }
 
-    return job;
+    return { job, attempt };
   }
 
   private async publishProcessingJobRequested(message: ProcessingJobRequestedMessage): Promise<void> {
-    await this.publisher.publish(message);
+    await this.publisher.publishRequested(message);
   }
 
   private async finalizeQueuedJob(input: {
     actor: AuditActor;
     job: ProcessingJobRecord;
-    attemptId: string;
+    attempt: JobAttemptRecord;
     now: Date;
   }): Promise<ProcessingJobRecord> {
-    const queuedJob = ProcessingJobEntity.markQueued({
+    const queuedJob = markJobAsQueued({
       job: input.job,
       now: input.now
     });
-    const attempt = ProcessingJobEntity.createAttempt({
-      attemptId: input.attemptId,
-      jobId: input.job.jobId,
-      attemptNumber: 1,
-      pipelineVersion: input.job.pipelineVersion,
-      now: input.now
+    const queuedAttempt = markAttemptAsQueued({
+      attempt: input.attempt
     });
 
     await this.unitOfWork.runInTransaction(async () => {
       await this.jobs.save(queuedJob);
-      await this.attempts.save(attempt);
+      await this.attempts.save(queuedAttempt);
       await this.audit.record({
         eventId: this.idGenerator.next('audit'),
         eventType: 'PROCESSING_JOB_QUEUED',
@@ -340,7 +351,7 @@ export class SubmitDocumentUseCase {
         metadata: {
           documentId: input.job.documentId,
           jobId: input.job.jobId,
-          attemptId: input.attemptId,
+          attemptId: queuedAttempt.attemptId,
           requestedMode: input.job.requestedMode
         },
         createdAt: input.now
@@ -360,10 +371,11 @@ export class SubmitDocumentUseCase {
     outputVersion: string;
     now: Date;
   }): Promise<JobResponse> {
-    const job = ProcessingJobEntity.createDeduplicated({
+    const job = createDeduplicatedJob({
       jobId: this.idGenerator.next('job'),
       documentId: input.documentId,
       requestedMode: input.requestedMode,
+      queueName: DEFAULT_PROCESSING_QUEUE_NAME,
       pipelineVersion: input.pipelineVersion,
       outputVersion: input.outputVersion,
       requestedBy: input.actor,
@@ -414,13 +426,15 @@ export class SubmitDocumentUseCase {
     now: Date;
     errorMessage: string;
   }): Promise<void> {
+    const failedJob = recordJobError({
+      job: input.job,
+      errorCode: ErrorCode.TRANSIENT_FAILURE,
+      errorMessage: input.errorMessage,
+      now: input.now
+    });
+
     await this.unitOfWork.runInTransaction(async () => {
-      await this.jobs.save({
-        ...input.job,
-        errorCode: ErrorCode.TRANSIENT_FAILURE,
-        errorMessage: input.errorMessage,
-        updatedAt: input.now
-      });
+      await this.jobs.save(failedJob);
       await this.audit.record({
         eventId: this.idGenerator.next('audit'),
         eventType: 'PROCESSING_JOB_QUEUEING_FAILED',

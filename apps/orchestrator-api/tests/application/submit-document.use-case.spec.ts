@@ -54,7 +54,8 @@ const createSubmitDocumentUseCase = (overrides: Partial<{
   storage: InMemoryBinaryStorageAdapter;
   publisher: InMemoryJobPublisherAdapter | {
     messages?: unknown[];
-    publish(message: unknown): Promise<void>;
+    publishRequested(message: unknown): Promise<void>;
+    publishRetry(message: unknown, retryAttempt: number): Promise<void>;
   };
   unitOfWork: { runInTransaction<T>(work: () => Promise<T>): Promise<T> };
 }> = {}) => {
@@ -279,8 +280,11 @@ describe('SubmitDocumentUseCase', () => {
 
   it('marks the job as STORED and returns a transient failure when queue publication fails', async () => {
     const publisher = {
-      async publish(): Promise<void> {
+      async publishRequested(): Promise<void> {
         throw new Error('rabbitmq unavailable');
+      },
+      async publishRetry(): Promise<void> {
+        return;
       }
     };
     const context = createSubmitDocumentUseCase({ publisher });
@@ -301,7 +305,11 @@ describe('SubmitDocumentUseCase', () => {
       status: JobStatus.STORED,
       errorCode: 'TRANSIENT_FAILURE'
     });
-    await expect(context.attempts.listByJobId(storedJob.jobId)).resolves.toEqual([]);
+    await expect(context.attempts.listByJobId(storedJob.jobId)).resolves.toMatchObject([
+      {
+        status: 'PENDING'
+      }
+    ]);
   });
 
   it('deletes a newly uploaded binary when the first transaction fails', async () => {
