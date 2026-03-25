@@ -20,6 +20,11 @@ import {
   InMemoryProcessingResultRepository,
   InMemoryUnitOfWork
 } from './adapters/out/repositories/in-memory.repositories';
+import { AuditEventRecorder } from './application/services/audit-event-recorder.service';
+import { AttemptExecutionCoordinator } from './application/services/attempt-execution-coordinator.service';
+import { ProcessingContextLoader } from './application/services/processing-context-loader.service';
+import { ProcessingFailureRecoveryService } from './application/services/processing-failure-recovery.service';
+import { ProcessingSuccessPersister } from './application/services/processing-success-persister.service';
 import { ProcessJobMessageUseCase } from './application/use-cases/process-job-message.use-case';
 import type {
   AuditPort,
@@ -120,6 +125,11 @@ export class DocumentProcessingWorkerModule {
       RetryPolicyService,
       RetentionPolicyService,
       RedactionPolicyService,
+      AuditEventRecorder,
+      ProcessingContextLoader,
+      AttemptExecutionCoordinator,
+      ProcessingSuccessPersister,
+      ProcessingFailureRecoveryService,
       {
         provide: TOKENS.EXTRACTION_PIPELINE,
         useFactory: (policy: ProcessingOutcomePolicy) =>
