@@ -22,6 +22,9 @@ import { InMemoryBinaryStorageAdapter } from '../../src/adapters/out/storage/in-
 
 describe('Document jobs e2e', () => {
   let app: INestApplication;
+  let audit: InMemoryAuditRepository;
+  let jobs: InMemoryProcessingJobRepository;
+  let attempts: InMemoryJobAttemptRepository;
 
   const waitForJobStatus = async (jobId: string, expectedStatus: string) => {
     for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -44,10 +47,10 @@ describe('Document jobs e2e', () => {
     const idGenerator = new IncrementalIdGenerator();
     const storage = new InMemoryBinaryStorageAdapter();
     const documents = new InMemoryDocumentRepository();
-    const jobs = new InMemoryProcessingJobRepository();
-    const attempts = new InMemoryJobAttemptRepository();
+    jobs = new InMemoryProcessingJobRepository();
+    attempts = new InMemoryJobAttemptRepository();
     const results = new InMemoryProcessingResultRepository();
-    const audit = new InMemoryAuditRepository();
+    audit = new InMemoryAuditRepository();
     const publisher = new InMemoryJobPublisherAdapter();
     publisher.subscribe(async (message) => {
       const document = await documents.findById(message.documentId);
@@ -162,6 +165,70 @@ describe('Document jobs e2e', () => {
     expect(resultResponse.body.payload).toContain('[ilegivel]');
   });
 
+  it('returns the validation error envelope when the upload is missing', async () => {
+    const response = await request(app.getHttpServer()).post('/v1/parsing/jobs');
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      errorCode: 'VALIDATION_ERROR',
+      message: 'file is required'
+    });
+  });
+
+  it('returns the not found error envelope for an unknown job', async () => {
+    const response = await request(app.getHttpServer())
+      .get('/v1/parsing/jobs/job-missing')
+      .set('x-role', Role.OPERATOR);
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({
+      errorCode: 'NOT_FOUND',
+      message: 'Processing job not found',
+      metadata: {
+        jobId: 'job-missing'
+      }
+    });
+  });
+
+  it('defaults missing actor headers to local-owner and OWNER', async () => {
+    const createResponse = await request(app.getHttpServer())
+      .post('/v1/parsing/jobs')
+      .attach('file', createPdfBuffer(1, 'default actor headers'), {
+        filename: 'default-owner.pdf',
+        contentType: 'application/pdf'
+      });
+
+    expect(createResponse.status).toBe(201);
+
+    await waitForJobStatus(createResponse.body.jobId, 'COMPLETED');
+
+    const resultResponse = await request(app.getHttpServer()).get(
+      `/v1/parsing/jobs/${createResponse.body.jobId}/result`
+    );
+
+    expect(resultResponse.status).toBe(200);
+
+    const events = await audit.list();
+    const queriedEvent = [...events].reverse().find(
+      (event) =>
+        event.eventType === 'RESULT_QUERIED' &&
+        event.metadata?.jobId === createResponse.body.jobId &&
+        event.actor.actorId === 'local-owner'
+    );
+
+    expect(queriedEvent).toMatchObject({
+      eventType: 'RESULT_QUERIED',
+      actor: {
+        actorId: 'local-owner',
+        role: Role.OWNER
+      },
+      metadata: {
+        jobId: createResponse.body.jobId,
+        documentId: createResponse.body.documentId
+      }
+    });
+  });
+
   it('allows OPERATOR to read but blocks reprocessing', async () => {
     const createResponse = await request(app.getHttpServer())
       .post('/v1/parsing/jobs')
@@ -183,5 +250,61 @@ describe('Document jobs e2e', () => {
       .send({ reason: 'not allowed' });
 
     expect(forbiddenResponse.status).toBe(403);
+    expect(forbiddenResponse.body).toMatchObject({
+      errorCode: 'AUTHORIZATION_ERROR',
+      message: 'Only OWNER can request reprocessing'
+    });
+  });
+
+  it('reprocesses a completed job without overwriting the original history', async () => {
+    const createResponse = await request(app.getHttpServer())
+      .post('/v1/parsing/jobs')
+      .set('x-role', Role.OWNER)
+      .attach('file', createPdfBuffer(1, 'reprocess success'), {
+        filename: 'reprocess-success.pdf',
+        contentType: 'application/pdf'
+      });
+
+    await waitForJobStatus(createResponse.body.jobId, 'COMPLETED');
+
+    const originalResultResponse = await request(app.getHttpServer())
+      .get(`/v1/parsing/jobs/${createResponse.body.jobId}/result`)
+      .set('x-role', Role.OWNER);
+
+    const reprocessResponse = await request(app.getHttpServer())
+      .post(`/v1/parsing/jobs/${createResponse.body.jobId}/reprocess`)
+      .set('x-role', Role.OWNER)
+      .send({ reason: 'model update' });
+
+    expect(reprocessResponse.status).toBe(201);
+    expect(reprocessResponse.body.jobId).not.toBe(createResponse.body.jobId);
+    expect(reprocessResponse.body.status).toBe('QUEUED');
+
+    await waitForJobStatus(reprocessResponse.body.jobId, 'COMPLETED');
+
+    const originalStatusResponse = await request(app.getHttpServer())
+      .get(`/v1/parsing/jobs/${createResponse.body.jobId}`)
+      .set('x-role', Role.OWNER);
+    const latestOriginalResultResponse = await request(app.getHttpServer())
+      .get(`/v1/parsing/jobs/${createResponse.body.jobId}/result`)
+      .set('x-role', Role.OWNER);
+    const reprocessedResultResponse = await request(app.getHttpServer())
+      .get(`/v1/parsing/jobs/${reprocessResponse.body.jobId}/result`)
+      .set('x-role', Role.OWNER);
+
+    expect(originalStatusResponse.body.status).toBe('COMPLETED');
+    expect(latestOriginalResultResponse.body.payload).toBe(originalResultResponse.body.payload);
+    expect(reprocessedResultResponse.body.payload).toBe(originalResultResponse.body.payload);
+
+    await expect(jobs.findById(reprocessResponse.body.jobId)).resolves.toMatchObject({
+      reprocessOfJobId: createResponse.body.jobId,
+      status: JobStatus.COMPLETED
+    });
+
+    const reprocessAttempts = await attempts.listByJobId(reprocessResponse.body.jobId);
+    expect(reprocessAttempts).toHaveLength(1);
+    expect(reprocessAttempts[0]).toMatchObject({
+      attemptNumber: 1
+    });
   });
 });
