@@ -30,6 +30,9 @@ import { SimpleRbacAuthorizationAdapter } from '../../src/adapters/out/auth/simp
 import { SubmitDocumentUseCase } from '../../src/application/use-cases/submit-document.use-case';
 import { ReplayDeadLetterUseCase } from '../../src/application/use-cases/replay-dead-letter.use-case';
 import { ReprocessDocumentUseCase } from '../../src/application/use-cases/reprocess-document.use-case';
+import { AuditEventRecorder } from '../../src/application/services/audit-event-recorder.service';
+import { DerivedJobOrchestrator } from '../../src/application/services/derived-job-orchestrator.service';
+import { QueuePublicationFailureHandler } from '../../src/application/services/queue-publication-failure-handler.service';
 import { CompatibleResultReusePolicy } from '../../src/domain/policies/compatible-result-reuse.policy';
 import { DocumentStoragePolicy } from '../../src/domain/policies/document-storage.policy';
 import { DocumentAcceptancePolicy } from '../../src/domain/policies/document-acceptance.policy';
@@ -94,6 +97,16 @@ const createSubmitDocumentUseCase = (overrides: Partial<{
   const unitOfWork = overrides.unitOfWork ?? new InMemoryUnitOfWork();
   const retentionPolicy = new RetentionPolicyService();
   const redactionPolicy = new RedactionPolicyService();
+  const auditEventRecorder = new AuditEventRecorder(audit, idGenerator, retentionPolicy, redactionPolicy);
+  const queuePublicationFailureHandler = new QueuePublicationFailureHandler(jobs, unitOfWork, auditEventRecorder);
+  const derivedJobOrchestrator = new DerivedJobOrchestrator(
+    idGenerator,
+    jobs,
+    attempts,
+    publisher,
+    unitOfWork,
+    queuePublicationFailureHandler
+  );
 
   return {
     authorization,
@@ -115,6 +128,9 @@ const createSubmitDocumentUseCase = (overrides: Partial<{
     unitOfWork,
     retentionPolicy,
     redactionPolicy,
+    auditEventRecorder,
+    queuePublicationFailureHandler,
+    derivedJobOrchestrator,
     useCase: new SubmitDocumentUseCase(
       authorization,
       clock,
@@ -128,7 +144,6 @@ const createSubmitDocumentUseCase = (overrides: Partial<{
       results,
       results,
       publisher,
-      audit,
       logging,
       metrics,
       tracing,
@@ -138,7 +153,9 @@ const createSubmitDocumentUseCase = (overrides: Partial<{
       new PageCountPolicy(),
       new DocumentStoragePolicy(retentionPolicy),
       retentionPolicy,
-      redactionPolicy
+      redactionPolicy,
+      auditEventRecorder,
+      queuePublicationFailureHandler
     )
   };
 };
@@ -147,35 +164,27 @@ const createReprocessUseCase = (context: ReturnType<typeof createSubmitDocumentU
   new ReprocessDocumentUseCase(
     context.authorization,
     context.clock,
-    context.idGenerator,
     context.jobs,
-    context.attempts,
-    context.publisher,
-    context.audit,
     context.logging,
     context.metrics,
     context.tracing,
-    context.unitOfWork,
-    context.retentionPolicy,
-    context.redactionPolicy
+    context.redactionPolicy,
+    context.auditEventRecorder,
+    context.derivedJobOrchestrator
   );
 
 const createReplayDeadLetterUseCase = (context: ReturnType<typeof createSubmitDocumentUseCase>) =>
   new ReplayDeadLetterUseCase(
     context.authorization,
     context.clock,
-    context.idGenerator,
     context.deadLetters,
     context.jobs,
-    context.attempts,
-    context.publisher,
-    context.audit,
     context.logging,
     context.metrics,
     context.tracing,
-    context.unitOfWork,
-    context.retentionPolicy,
-    context.redactionPolicy
+    context.redactionPolicy,
+    context.auditEventRecorder,
+    context.derivedJobOrchestrator
   );
 
 describe('SubmitDocumentUseCase', () => {

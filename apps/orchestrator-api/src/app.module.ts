@@ -25,6 +25,9 @@ import { Sha256HashingAdapter } from './adapters/out/storage/sha256-hashing.adap
 import { SimplePageCounterAdapter } from './adapters/out/storage/simple-page-counter.adapter';
 import { GetJobStatusUseCase } from './application/use-cases/get-job-status.use-case';
 import { GetProcessingResultUseCase } from './application/use-cases/get-processing-result.use-case';
+import { AuditEventRecorder } from './application/services/audit-event-recorder.service';
+import { DerivedJobOrchestrator } from './application/services/derived-job-orchestrator.service';
+import { QueuePublicationFailureHandler } from './application/services/queue-publication-failure-handler.service';
 import { ReplayDeadLetterUseCase } from './application/use-cases/replay-dead-letter.use-case';
 import { ReprocessDocumentUseCase } from './application/use-cases/reprocess-document.use-case';
 import { SubmitDocumentUseCase } from './application/use-cases/submit-document.use-case';
@@ -114,6 +117,9 @@ export class OrchestratorApiModule {
       DocumentStoragePolicy,
       RetentionPolicyService,
       RedactionPolicyService,
+      AuditEventRecorder,
+      QueuePublicationFailureHandler,
+      DerivedJobOrchestrator,
       SubmitDocumentUseCase,
       GetJobStatusUseCase,
       GetProcessingResultUseCase,
