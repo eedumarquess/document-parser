@@ -1,4 +1,9 @@
-import type { AuditActor, ProcessingJobRequestedMessage, ProcessingOutcome } from '@document-parser/shared-kernel';
+import type {
+  AuditActor,
+  LogRecord,
+  ProcessingJobRequestedMessage,
+  ProcessingOutcome
+} from '@document-parser/shared-kernel';
 import type {
   AuditEventRecord,
   DeadLetterRecord,
@@ -49,6 +54,7 @@ export interface PageArtifactRepositoryPort {
 
 export interface DeadLetterRepositoryPort {
   save(record: DeadLetterRecord): Promise<void>;
+  findById(dlqEventId: string): Promise<DeadLetterRecord | undefined>;
   list(): Promise<DeadLetterRecord[]>;
 }
 
@@ -60,6 +66,36 @@ export interface AuditPort {
 export interface JobPublisherPort {
   publishRequested(message: ProcessingJobRequestedMessage): Promise<void>;
   publishRetry(message: ProcessingJobRequestedMessage, retryAttempt: number): Promise<void>;
+}
+
+export interface LoggingPort {
+  log(entry: LogRecord): Promise<void>;
+}
+
+export interface MetricsPort {
+  increment(input: {
+    name: string;
+    value?: number;
+    traceId?: string;
+    tags?: Record<string, string>;
+  }): Promise<void>;
+  recordHistogram(input: {
+    name: string;
+    value: number;
+    traceId?: string;
+    tags?: Record<string, string>;
+  }): Promise<void>;
+}
+
+export interface TracingPort {
+  runInSpan<T>(
+    input: {
+      traceId: string;
+      spanName: string;
+      attributes?: Record<string, unknown>;
+    },
+    work: () => Promise<T>
+  ): Promise<T>;
 }
 
 export interface UnitOfWorkPort {
