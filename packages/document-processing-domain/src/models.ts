@@ -1,4 +1,10 @@
-import type { AttemptStatus, JobStatus, AuditActor, JobWarning } from '@document-parser/shared-kernel';
+import type {
+  AttemptStatus,
+  JobStatus,
+  AuditActor,
+  FallbackReason,
+  JobWarning
+} from '@document-parser/shared-kernel';
 
 export type IngestionTransitionRecord = {
   status:
@@ -45,7 +51,7 @@ export type JobAttemptRecord = {
   pipelineVersion: string;
   status: AttemptStatus;
   fallbackUsed: boolean;
-  fallbackReason?: string;
+  fallbackReason?: FallbackReason;
   startedAt?: Date;
   finishedAt?: Date;
   latencyMs?: number;

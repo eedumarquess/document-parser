@@ -299,7 +299,7 @@ export function completeAttemptWithOutcome(input: {
       ...input.attempt,
       status: attemptStatus,
       fallbackUsed: input.outcome.fallbackUsed,
-      fallbackReason: input.outcome.fallbackUsed ? 'PIPELINE_FALLBACK_TRIGGERED' : undefined,
+      fallbackReason: input.outcome.fallbackReason,
       normalizationVersion: input.outcome.normalizationVersion,
       promptVersion: input.outcome.promptVersion,
       modelVersion: input.outcome.modelVersion,
