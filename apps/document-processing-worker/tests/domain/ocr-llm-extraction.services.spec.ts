@@ -87,6 +87,12 @@ describe('HeuristicEvaluationService', () => {
         FallbackReason.CRITICAL_TARGET_MISSING
       ])
     );
+    for (const target of targets) {
+      expect(target).not.toHaveProperty('templateId');
+      expect(target).not.toHaveProperty('templateVersion');
+      expect(target).not.toHaveProperty('templateStatus');
+      expect(target).not.toHaveProperty('matchingRules');
+    }
   });
 
   it('creates a low-confidence page fallback when OCR confidence drops below the threshold', () => {

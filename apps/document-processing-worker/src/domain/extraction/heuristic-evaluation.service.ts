@@ -37,6 +37,8 @@ export class HeuristicEvaluationService {
     pageNumber: number;
     normalizedText: string;
   }): PageExtraction['checkboxFindings'] {
+    // These findings stay internal to a single attempt and only drive fallback behavior.
+    // They are not administrative template definitions.
     const findings: PageExtraction['checkboxFindings'] = [];
     let index = 0;
 
@@ -65,6 +67,7 @@ export class HeuristicEvaluationService {
     pageNumber: number;
     normalizedText: string;
   }): PageExtraction['criticalFieldFindings'] {
+    // Critical field markers are heuristic extraction hints, not a canonical field catalog.
     const findings: PageExtraction['criticalFieldFindings'] = [];
     let index = 0;
 
