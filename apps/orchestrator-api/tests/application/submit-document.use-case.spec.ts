@@ -286,6 +286,158 @@ describe('SubmitDocumentUseCase', () => {
     await expect(context.attempts.listByJobId(secondResponse.jobId)).resolves.toEqual([]);
   });
 
+  it('copies technical version stamps and lineage when a compatible result is reused', async () => {
+    const context = createSubmitDocumentUseCase();
+    const actor = buildActor();
+    const file = buildUploadedFile();
+    const sourceResponse = await context.useCase.execute(
+      {
+        file,
+        requestedMode: 'STANDARD',
+        forceReprocess: false
+      },
+      actor,
+      'trace-submit-lineage-source'
+    );
+    const compatibilityKey = CompatibilityKey.build({
+      hash: await context.hashing.calculateHash(file.buffer),
+      requestedMode: 'STANDARD',
+      pipelineVersion: DEFAULT_PIPELINE_VERSION,
+      outputVersion: DEFAULT_OUTPUT_VERSION
+    });
+
+    await context.results.save({
+      resultId: 'result-source-lineage',
+      jobId: sourceResponse.jobId,
+      documentId: sourceResponse.documentId,
+      compatibilityKey,
+      status: JobStatus.COMPLETED,
+      requestedMode: 'STANDARD',
+      pipelineVersion: DEFAULT_PIPELINE_VERSION,
+      outputVersion: DEFAULT_OUTPUT_VERSION,
+      confidence: 0.97,
+      warnings: [],
+      payload: 'resultado reutilizado',
+      engineUsed: 'OCR+LLM',
+      totalLatencyMs: 1200,
+      promptVersion: 'prompt-v2',
+      modelVersion: 'model-v3',
+      normalizationVersion: 'normalization-v4',
+      sourceJobId: 'job-origin',
+      createdAt: new Date('2026-03-25T12:10:00.000Z'),
+      updatedAt: new Date('2026-03-25T12:10:00.000Z'),
+      retentionUntil: new Date('2026-06-23T12:10:00.000Z')
+    });
+
+    const reusedResponse = await context.useCase.execute(
+      {
+        file,
+        requestedMode: 'STANDARD',
+        forceReprocess: false
+      },
+      actor,
+      'trace-submit-lineage-reused'
+    );
+
+    await expect(context.jobs.findById(reusedResponse.jobId)).resolves.toMatchObject({
+      sourceJobId: 'job-origin',
+      sourceResultId: 'result-source-lineage',
+      reusedResult: true
+    });
+    await expect(context.results.findByJobId(reusedResponse.jobId)).resolves.toMatchObject({
+      promptVersion: 'prompt-v2',
+      modelVersion: 'model-v3',
+      normalizationVersion: 'normalization-v4',
+      sourceJobId: 'job-origin'
+    });
+  });
+
+  it('preserves the original sourceJobId across chained compatible result reuse', async () => {
+    const context = createSubmitDocumentUseCase();
+    const actor = buildActor();
+    const file = buildUploadedFile();
+    const originalResponse = await context.useCase.execute(
+      {
+        file,
+        requestedMode: 'STANDARD',
+        forceReprocess: false
+      },
+      actor,
+      'trace-submit-chain-original'
+    );
+    const compatibilityKey = CompatibilityKey.build({
+      hash: await context.hashing.calculateHash(file.buffer),
+      requestedMode: 'STANDARD',
+      pipelineVersion: DEFAULT_PIPELINE_VERSION,
+      outputVersion: DEFAULT_OUTPUT_VERSION
+    });
+
+    await context.results.save({
+      resultId: 'result-original-chain',
+      jobId: originalResponse.jobId,
+      documentId: originalResponse.documentId,
+      compatibilityKey,
+      status: JobStatus.COMPLETED,
+      requestedMode: 'STANDARD',
+      pipelineVersion: DEFAULT_PIPELINE_VERSION,
+      outputVersion: DEFAULT_OUTPUT_VERSION,
+      confidence: 0.99,
+      warnings: [],
+      payload: 'resultado original',
+      engineUsed: 'OCR',
+      totalLatencyMs: 1000,
+      createdAt: new Date('2026-03-25T12:00:00.000Z'),
+      updatedAt: new Date('2026-03-25T12:00:00.000Z'),
+      retentionUntil: new Date('2026-06-23T12:00:00.000Z')
+    });
+
+    const secondResponse = await context.useCase.execute(
+      {
+        file,
+        requestedMode: 'STANDARD',
+        forceReprocess: false
+      },
+      actor,
+      'trace-submit-chain-second'
+    );
+    const secondResult = await context.results.findByJobId(secondResponse.jobId);
+    expect(secondResult).toBeDefined();
+
+    expect(secondResult).toMatchObject({
+      sourceJobId: originalResponse.jobId
+    });
+    await context.results.save({
+      ...(secondResult as ProcessingResultRecord),
+      createdAt: new Date('2026-03-25T12:01:00.000Z'),
+      updatedAt: new Date('2026-03-25T12:01:00.000Z')
+    });
+
+    const thirdResponse = await context.useCase.execute(
+      {
+        file,
+        requestedMode: 'STANDARD',
+        forceReprocess: false
+      },
+      actor,
+      'trace-submit-chain-third'
+    );
+
+    await expect(context.jobs.findById(secondResponse.jobId)).resolves.toMatchObject({
+      sourceJobId: originalResponse.jobId,
+      sourceResultId: 'result-original-chain'
+    });
+    await expect(context.jobs.findById(thirdResponse.jobId)).resolves.toMatchObject({
+      sourceJobId: originalResponse.jobId,
+      sourceResultId: secondResult?.resultId
+    });
+    await expect(context.results.findByJobId(thirdResponse.jobId)).resolves.toMatchObject({
+      sourceJobId: originalResponse.jobId
+    });
+    expect(context.publisher.messages).toHaveLength(1);
+    await expect(context.attempts.listByJobId(secondResponse.jobId)).resolves.toEqual([]);
+    await expect(context.attempts.listByJobId(thirdResponse.jobId)).resolves.toEqual([]);
+  });
+
   it('keeps compatible reuse based only on compatibilityKey even if a persisted result carries unrelated metadata', async () => {
     const context = createSubmitDocumentUseCase();
     const actor = buildActor();

@@ -472,6 +472,7 @@ export class SubmitDocumentUseCase {
     traceId: string;
     now: Date;
   }): Promise<JobResponse> {
+    const sourceJobId = input.compatibleResult.sourceJobId ?? input.compatibleResult.jobId;
     const job = createDeduplicatedJob({
       jobId: this.idGenerator.next('job'),
       documentId: input.documentId,
@@ -500,7 +501,10 @@ export class SubmitDocumentUseCase {
         payload: input.compatibleResult.payload,
         engineUsed: input.compatibleResult.engineUsed,
         totalLatencyMs: input.compatibleResult.totalLatencyMs,
-        sourceJobId: input.compatibleResult.jobId,
+        promptVersion: input.compatibleResult.promptVersion,
+        modelVersion: input.compatibleResult.modelVersion,
+        normalizationVersion: input.compatibleResult.normalizationVersion,
+        sourceJobId,
         createdAt: input.now,
         updatedAt: input.now,
         retentionUntil: this.retentionPolicy.calculateProcessingResultRetentionUntil(input.now)
@@ -514,7 +518,7 @@ export class SubmitDocumentUseCase {
         metadata: {
           documentId: input.documentId,
           jobId: job.jobId,
-          sourceJobId: input.compatibleResult.jobId,
+          sourceJobId,
           sourceResultId: input.compatibleResult.resultId
         },
         createdAt: input.now
@@ -604,7 +608,7 @@ export class SubmitDocumentUseCase {
         input.redactedPayload ??
         (input.metadata === undefined
           ? undefined
-          : (this.redactionPolicy.redact(input.metadata) as Record<string, unknown>)),
+          : this.redactionPolicy.redact(input.metadata)),
       createdAt: input.createdAt,
       retentionUntil: this.retentionPolicy.calculateAuditRetentionUntil(input.createdAt)
     });

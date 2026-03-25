@@ -92,7 +92,7 @@ export class ProcessingJobEntity {
       status: input.compatibleResult.status,
       forceReprocess: false,
       reusedResult: true,
-      sourceJobId: input.compatibleResult.jobId,
+      sourceJobId: input.compatibleResult.sourceJobId ?? input.compatibleResult.jobId,
       sourceResultId: input.compatibleResult.resultId,
       pipelineVersion: input.pipelineVersion,
       outputVersion: input.outputVersion,
