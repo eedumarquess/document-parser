@@ -6,6 +6,17 @@ import type {
   JobWarning
 } from '@document-parser/shared-kernel';
 
+export type IngestionTransitionRecord = {
+  status:
+    | JobStatus.RECEIVED
+    | JobStatus.VALIDATED
+    | JobStatus.STORED
+    | JobStatus.DEDUPLICATED
+    | JobStatus.REPROCESSED
+    | JobStatus.QUEUED;
+  at: Date;
+};
+
 export type StorageReference = {
   bucket: string;
   objectKey: string;
@@ -48,6 +59,7 @@ export type ProcessingJobRecord = {
   warnings: JobWarning[];
   errorCode?: string;
   errorMessage?: string;
+  ingestionTransitions: IngestionTransitionRecord[];
   createdAt: Date;
   updatedAt: Date;
 };
@@ -71,6 +83,7 @@ export type ProcessingResultRecord = {
   resultId: string;
   jobId: string;
   documentId: string;
+  compatibilityKey: string;
   status: JobStatus.COMPLETED | JobStatus.PARTIAL | JobStatus.FAILED;
   requestedMode: string;
   pipelineVersion: string;

@@ -1,11 +1,13 @@
 import type { ProcessingOutcome } from '@document-parser/shared-kernel';
 import type { ProcessingResultRecord } from '../../contracts/models';
+import { CompatibilityKey } from '../value-objects/compatibility-key';
 
 export class ProcessingResultEntity {
   public static create(input: {
     resultId: string;
     jobId: string;
     documentId: string;
+    hash: string;
     requestedMode: string;
     pipelineVersion: string;
     outputVersion: string;
@@ -16,6 +18,12 @@ export class ProcessingResultEntity {
       resultId: input.resultId,
       jobId: input.jobId,
       documentId: input.documentId,
+      compatibilityKey: CompatibilityKey.build({
+        hash: input.hash,
+        requestedMode: input.requestedMode,
+        pipelineVersion: input.pipelineVersion,
+        outputVersion: input.outputVersion
+      }),
       status: input.outcome.status,
       requestedMode: input.requestedMode,
       pipelineVersion: input.pipelineVersion,
