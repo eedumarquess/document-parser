@@ -1,6 +1,7 @@
 import { InMemoryAuditRepository, InMemoryDocumentRepository, InMemoryJobAttemptRepository, InMemoryProcessingJobRepository, InMemoryProcessingResultRepository, InMemoryUnitOfWork } from '../adapters/out/repositories/in-memory.repositories';
 import {
   MongoAuditRepositoryAdapter,
+  MongoDeadLetterRepositoryAdapter,
   MongoDocumentRepositoryAdapter,
   MongoJobAttemptRepositoryAdapter,
   MongoProcessingJobRepositoryAdapter,
@@ -52,6 +53,7 @@ export function buildOrchestratorProviderOverridesFromEnv(): OrchestratorProvide
     jobs: new MongoProcessingJobRepositoryAdapter(mongoProvider, sessionContext),
     attempts: new MongoJobAttemptRepositoryAdapter(mongoProvider, sessionContext),
     results,
+    deadLetters: new MongoDeadLetterRepositoryAdapter(mongoProvider, sessionContext),
     compatibleResults: results,
     publisher: new RabbitMqJobPublisherAdapter(
       getRequiredEnv('RABBITMQ_URL'),

@@ -2,6 +2,7 @@ import type { Collection } from 'mongodb';
 import { JobStatus } from '@document-parser/shared-kernel';
 import type {
   AuditEventRecord,
+  DeadLetterRecord,
   DocumentRecord,
   IngestionTransitionRecord,
   JobAttemptRecord,
@@ -11,6 +12,7 @@ import type {
 import type {
   AuditPort,
   CompatibleResultLookupPort,
+  DeadLetterRepositoryPort,
   DocumentRepositoryPort,
   JobAttemptRepositoryPort,
   ProcessingJobRepositoryPort,
@@ -44,6 +46,8 @@ type MongoJobAttemptShape = JobAttemptRecord;
 type MongoProcessingResultShape = ProcessingResultRecord;
 
 type MongoAuditEventShape = AuditEventRecord;
+
+type MongoDeadLetterShape = DeadLetterRecord;
 
 abstract class MongoRepositoryBase {
   public constructor(
@@ -247,7 +251,55 @@ export class MongoProcessingResultRepositoryAdapter
         { key: { jobId: 1 } },
         { key: { compatibilityKey: 1, createdAt: -1 } },
         { key: { documentId: 1 } },
-        { key: { status: 1 } }
+        { key: { status: 1 } },
+        { key: { retentionUntil: 1 }, expireAfterSeconds: 0 }
+      ]);
+      this.indexesEnsured = true;
+    }
+
+    return collection;
+  }
+}
+
+export class MongoDeadLetterRepositoryAdapter
+  extends MongoRepositoryBase
+  implements DeadLetterRepositoryPort
+{
+  private indexesEnsured = false;
+
+  public async save(record: DeadLetterRecord): Promise<void> {
+    const collection = await this.getCollection();
+    await collection.replaceOne(
+      { dlqEventId: record.dlqEventId },
+      record,
+      { upsert: true, session: this.getSession() }
+    );
+  }
+
+  public async findById(dlqEventId: string): Promise<DeadLetterRecord | undefined> {
+    const collection = await this.getCollection();
+    const record = await collection.findOne({ dlqEventId }, { session: this.getSession() });
+    return record === null ? undefined : record;
+  }
+
+  public async list(): Promise<DeadLetterRecord[]> {
+    const collection = await this.getCollection();
+    return collection
+      .find({}, { session: this.getSession() })
+      .sort({ lastSeenAt: -1 })
+      .toArray();
+  }
+
+  private async getCollection(): Promise<Collection<MongoDeadLetterShape>> {
+    const database = await this.provider.getDatabase();
+    const collection = database.collection<MongoDeadLetterShape>('dead_letter_events');
+    if (!this.indexesEnsured) {
+      await collection.createIndexes([
+        { key: { dlqEventId: 1 }, unique: true },
+        { key: { jobId: 1 } },
+        { key: { reasonCode: 1 } },
+        { key: { traceId: 1 } },
+        { key: { retentionUntil: 1 }, expireAfterSeconds: 0 }
       ]);
       this.indexesEnsured = true;
     }
@@ -283,7 +335,10 @@ export class MongoAuditRepositoryAdapter extends MongoRepositoryBase implements 
       await collection.createIndexes([
         { key: { eventId: 1 }, unique: true },
         { key: { eventType: 1 } },
-        { key: { createdAt: -1 } }
+        { key: { aggregateType: 1, aggregateId: 1 } },
+        { key: { traceId: 1 } },
+        { key: { createdAt: -1 } },
+        { key: { retentionUntil: 1 }, expireAfterSeconds: 0 }
       ]);
       this.indexesEnsured = true;
     }

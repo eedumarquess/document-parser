@@ -3,6 +3,7 @@ import { JobStatus } from '@document-parser/shared-kernel';
 import type {
   AuditPort,
   CompatibleResultLookupPort,
+  DeadLetterRepositoryPort,
   DocumentRepositoryPort,
   JobAttemptRepositoryPort,
   ProcessingJobRepositoryPort,
@@ -11,6 +12,7 @@ import type {
 } from '../../../contracts/ports';
 import type {
   AuditEventRecord,
+  DeadLetterRecord,
   DocumentRecord,
   JobAttemptRecord,
   ProcessingJobRecord,
@@ -112,6 +114,23 @@ export class InMemoryProcessingResultRepository
 export class InMemoryUnitOfWork implements UnitOfWorkPort {
   public async runInTransaction<T>(work: () => Promise<T>): Promise<T> {
     return work();
+  }
+}
+
+@Injectable()
+export class InMemoryDeadLetterRepository implements DeadLetterRepositoryPort {
+  private readonly records = new Map<string, DeadLetterRecord>();
+
+  public async save(record: DeadLetterRecord): Promise<void> {
+    this.records.set(record.dlqEventId, record);
+  }
+
+  public async findById(dlqEventId: string): Promise<DeadLetterRecord | undefined> {
+    return this.records.get(dlqEventId);
+  }
+
+  public async list(): Promise<DeadLetterRecord[]> {
+    return [...this.records.values()];
   }
 }
 
