@@ -1,86 +1,87 @@
 # Document Parser
 
-Parser documental assíncrono para ficha clínica, com foco em reduzir digitação manual e devolver saída estruturada pronta para consumo futuro.
+Parser documental assincrono para ficha clinica, com foco em reduzir digitacao manual e devolver texto consolidado com marcacoes semanticas.
 
-## Visão geral
+## Visao geral
 
-O MVP processa documentos enviados via `multipart/form-data`, armazena o arquivo bruto no MinIO, cria um job assíncrono e delega o processamento a um worker especializado. O resultado final é persistido e exposto por uma API orientada a jobs.
+O MVP processa documentos enviados via `multipart/form-data`, armazena o arquivo bruto no storage, cria um job assincrono e delega o processamento a um worker especializado. O resultado final e persistido e exposto por uma API orientada a jobs.
 
-O contrato oficial do sistema não é texto puro. A saída deve conter:
+O contrato externo do MVP e minimo. A resposta final contem:
 
-- texto consolidado normalizado
-- campos extraídos
-- checkbox marcado ou desmarcado
-- trechos manuscritos
-- trechos ilegíveis
-- score de confiança
-- versões de pipeline, modelo, prompt e contrato
+- `jobId`
+- `documentId`
+- `status`
+- `requestedMode`
+- `pipelineVersion`
+- `outputVersion`
+- `confidence`
+- `warnings`
+- `payload` textual consolidado com marcacoes semanticas
 
 ## Objetivos do MVP
 
-- Substituir o preenchimento manual das informações do laudo por um pipeline automatizado
+- Substituir o preenchimento manual das informacoes do laudo por um pipeline automatizado
 - Suportar `PDF`, `JPG` e `PNG`
-- Operar sempre em modo assíncrono com `job/status`
-- Persistir documentos, artefatos e resultados para histórico e reprocessamento
-- Entregar rastreabilidade, observabilidade e versionamento desde a primeira versão
+- Operar sempre em modo assincrono com `job/status`
+- Persistir documentos, artefatos e resultados para historico e reprocessamento
+- Entregar rastreabilidade, observabilidade e versionamento desde a primeira versao
 
 ## Escopo funcional
 
 ### Entrada
 
 - Upload via `multipart/form-data`
-- Limite de até 10 páginas
-- Tamanho máximo de 50 MB
+- Limite de ate 10 paginas
+- Tamanho maximo de 50 MB
 - Tipos aceitos: `application/pdf`, `image/jpeg`, `image/png`
 
-### Saída
+### Saida
 
-- Texto único concatenado
-- Preservação semântica de checkbox, campos vazios, manuscrito e ilegibilidade
+- Texto unico concatenado com marcacoes semanticas
+- Marcador explicito `[ilegivel]` quando aplicavel
 - Idioma otimizado para `pt-BR`
-- Resposta final com metadados ricos de execução
+- Resposta final com metadados minimos de execucao
 
-### Comportamentos obrigatórios
+### Comportamentos obrigatorios
 
-- Idempotência por hash do arquivo combinado com versão de pipeline
-- Reaproveitamento de resultado quando o mesmo documento já tiver sido processado de forma compatível
-- Reprocessamento manual com nova versão, engine ou `forceReprocess=true`
-- Fallback `OCR tradicional -> validação heurística -> LLM`
-- DLQ para mensagens não processadas
+- Idempotencia por hash do arquivo combinado com versao de pipeline
+- Reaproveitamento de resultado quando o mesmo documento ja tiver sido processado de forma compativel
+- Reprocessamento manual com novo job e `forceReprocess=true`
+- Fallback `OCR tradicional -> validacao heuristica -> LLM`
+- DLQ para mensagens nao processadas
 
 ## Arquitetura proposta
 
-### Serviços
+### Servicos
 
 1. `orchestrator-api`
-   Responsável por validação, ingestão, persistência, criação de jobs, consulta de status e entrega do resultado.
+   Responsavel por validacao, ingestao, persistencia, criacao de jobs, consulta de status e entrega do resultado.
 
 2. `document-processing-worker`
-   Responsável por renderização por página, OCR, heurísticas, fallback para LLM, pós-processamento e montagem do payload final.
+   Responsavel por renderizacao por pagina, OCR, heuristicas, fallback para LLM e montagem do resultado final.
 
 ### Infraestrutura prevista
 
 - `MongoDB`: metadados, jobs, resultados, artefatos e auditoria
 - `MinIO`: arquivo original e artefatos derivados
 - `RabbitMQ`: fila principal, retry e DLQ
-- `Datadog` ou equivalente: métricas, logs estruturados e traces
+- `Datadog` ou equivalente: metricas, logs estruturados e traces
 
 ### Fluxo ponta a ponta
 
 1. Cliente envia arquivo para `POST /v1/parsing/jobs`
-2. API valida MIME, tamanho, número de páginas e hash
-3. Documento bruto é salvo no MinIO
-4. API registra documento e job no MongoDB
-5. API publica mensagem com referência segura do arquivo no RabbitMQ
-6. Worker consome a mensagem e renderiza o documento por página
-7. Worker executa OCR, heurísticas e fallback para LLM quando necessário
-8. Worker produz payload enriquecido com texto, campos, checkbox, manuscrito, warnings e confidence
-9. Resultado é persistido no MongoDB e artefatos no MinIO
-10. Cliente consulta status e resultado pelos endpoints de job
+2. API valida MIME, tamanho, numero de paginas e hash
+3. Documento bruto e salvo no storage
+4. API registra documento e job no banco
+5. API publica mensagem com referencia segura do arquivo na fila
+6. Worker consome a mensagem e executa OCR, heuristicas e fallback para LLM quando necessario
+7. Worker produz payload textual consolidado, warnings e confidence
+8. Resultado e persistido no banco e artefatos no storage
+9. Cliente consulta status e resultado pelos endpoints de job
 
-## Bounded context e subdomínios
+## Bounded context e subdominios
 
-O bounded context raiz é `Document Parsing`. Os subdomínios planejados são:
+O bounded context raiz e `Document Parsing`. Os subdominios planejados sao:
 
 - `Ingestion`
 - `Document Processing`
@@ -89,7 +90,18 @@ O bounded context raiz é `Document Parsing`. Os subdomínios planejados são:
 - `Template Management`
 - `Audit/Observability`
 
-Os detalhes DDD estão em [docs/ddd/00-context-map.md](docs/ddd/00-context-map.md).
+`Template Management` fica explicitado, mas fora do contrato e do schema do MVP.
+
+## Base tecnica atual
+
+O repositorio ja contem:
+
+- monorepo `pnpm`
+- dois apps `NestJS`: `orchestrator-api` e `document-processing-worker`
+- `packages/shared-kernel` apenas com contratos tecnicos e enums compartilhados
+- `packages/testkit` com builders, fakes, clock fixo e helpers de teste
+- estrutura hexagonal em ambos os servicos
+- suites `domain`, `application`, `contracts` e `e2e`
 
 ## API inicial
 
@@ -100,56 +112,52 @@ Os detalhes DDD estão em [docs/ddd/00-context-map.md](docs/ddd/00-context-map.m
 - `GET /v1/parsing/jobs/{jobId}/result`
 - `POST /v1/parsing/jobs/{jobId}/reprocess`
 
-### Resposta mínima na criação do job
+### Resposta minima na criacao do job
 
 ```json
 {
   "jobId": "job_123",
   "documentId": "doc_123",
   "status": "QUEUED",
-  "hash": "sha256:...",
-  "mimeType": "application/pdf",
-  "pages": 3,
+  "requestedMode": "STANDARD",
+  "pipelineVersion": "dev-sha",
+  "outputVersion": "1.0.0",
   "createdAt": "2026-03-25T10:00:00.000Z",
   "reusedResult": false
 }
 ```
 
-## Requisitos não funcionais
+## Requisitos nao funcionais
 
 - SLA alvo de 10 a 15 segundos por documento
-- SLA máximo funcional de 30 segundos por documento
-- Persistência de resultados para consulta posterior
-- Retenção inicial de documentos por 1 ano
-- RBAC para acesso a documentos e resultados
+- SLA maximo funcional de 30 segundos por documento
+- Persistencia de resultados para consulta posterior
+- Retencao de 30 dias para original e artefatos
+- Retencao de 90 dias para OCR bruto e resultado final
+- Retencao de 180 dias para auditoria e DLQ
+- RBAC simples com `OWNER` e `OPERATOR`
 - Criptografia em repouso
-- Mascaramento de dados sensíveis em logs
-- Pseudonimização antes de chamadas a LLM externo
+- Mascaramento de dados sensiveis em logs
+- Mascaramento antes de chamadas a LLM externo
 
 ## Qualidade e aceite
 
 O aceite do MVP deve validar:
 
 - processamento de `PDF`, `JPG` e `PNG`
-- texto consolidado com marcações semânticas
-- distinção entre texto impresso e manuscrito
-- marcador explícito `[ilegível]` quando aplicável
-- score de confiança por documento
-- erros padronizados para falhas funcionais e técnicas
-- validação por golden dataset versionado
+- texto consolidado com marcacoes semanticas
+- marcador explicito `[ilegivel]` quando aplicavel
+- score de confianca por documento
+- erros padronizados para falhas funcionais e tecnicas
+- validacao por golden dataset versionado
 
-## Documentação derivada
+## Documentacao derivada
 
-- [Schemas futuros de persistência](docs/database-schemas.md)
+- [Schemas futuros de persistencia](docs/database-schemas.md)
 - [Mapa de contexto DDD](docs/ddd/00-context-map.md)
 - [DDD de Ingestion](docs/ddd/01-ingestion.md)
 - [DDD de Document Processing](docs/ddd/02-document-processing.md)
 - [DDD de OCR e LLM Extraction](docs/ddd/03-ocr-llm-extraction.md)
 - [DDD de Result Delivery](docs/ddd/04-result-delivery.md)
-- [DDD de Template Management](docs/ddd/05-template-management.md)
 - [DDD de Audit e Observability](docs/ddd/06-audit-observability.md)
-- [Plano de implementação](docs/plano-implementacao.md)
-
-## Estado atual do repositório
-
-Este repositório está em fase de definição arquitetural. Os documentos acima servem como base para iniciar a implementação dos dois serviços, da infraestrutura e do modelo de dados.
+- [Plano de implementacao](docs/plano-implementacao.md)
