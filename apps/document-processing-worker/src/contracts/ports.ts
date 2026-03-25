@@ -58,7 +58,12 @@ export interface AuditPort {
 }
 
 export interface JobPublisherPort {
-  publish(message: ProcessingJobRequestedMessage): Promise<void>;
+  publishRequested(message: ProcessingJobRequestedMessage): Promise<void>;
+  publishRetry(message: ProcessingJobRequestedMessage, retryAttempt: number): Promise<void>;
+}
+
+export interface UnitOfWorkPort {
+  runInTransaction<T>(work: () => Promise<T>): Promise<T>;
 }
 
 export interface ExtractionPipelinePort {
@@ -70,4 +75,3 @@ export interface ExtractionPipelinePort {
     original: Buffer;
   }): Promise<ProcessingOutcome>;
 }
-
