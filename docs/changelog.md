@@ -4,6 +4,50 @@ Todas as mudancas relevantes deste repositorio devem ser registradas aqui.
 
 O formato segue uma adaptacao simples de `Keep a Changelog` e usa as tags de contexto dos commits como apoio para rastreabilidade.
 
+## [2026-03-25] - Simplificacao estrutural do orchestrator e worker
+
+### Added
+
+- Novos servicos comuns na `orchestrator-api` para auditoria, tratamento de falha de publicacao e orquestracao de jobs derivados.
+- Novos servicos de aplicacao no worker para carregar contexto, iniciar tentativas, persistir sucesso e concentrar recovery de retry e DLQ.
+- Novos estagios internos da pipeline OCR/LLM para extracao por pagina, resolucao de fallback, montagem de artifacts e assembly do `ProcessingOutcome`.
+- Cobertura dedicada para `ProcessingSuccessPersister`, `ProcessingFailureRecoveryService` e para os novos estagios internos da pipeline.
+
+### Changed
+
+- `SubmitDocumentUseCase`, `ReprocessDocumentUseCase` e `ReplayDeadLetterUseCase` foram reduzidos para coordenacao de fluxo, validacao, logs e metricas, reaproveitando servicos comuns sem alterar contratos externos.
+- `ProcessJobMessageUseCase` passou a atuar como coordenador fino de tracing, metricas e logs, delegando lifecycle, retry, DLQ e persistencia para servicos especializados.
+- `OcrLlmExtractionPipelineAdapter` passou a apenas orquestrar estagios internos, mantendo `ExtractionPipelinePort.extract(...)` e o comportamento externo do worker.
+- `RetentionPolicyService` e testes auxiliares foram ajustados para reforcar tipos canonicos e eliminar problemas residuais de lint.
+
+### Fixed
+
+- Falhas de lint restantes em imports de tipo, enum comparison, `any` em teste e serializacao de mock `fetch`.
+- Duplicacao operacional entre orchestrator e worker na gravacao de auditoria, persistencia de sucesso e tratamento de falha de publicacao.
+- Divergencia de lifecycle causada por entidades locais redundantes, agora removidas em favor do pacote `@document-parser/document-processing-domain`.
+
+### Technical Notes
+
+- Endpoints HTTP, DTOs externos, contratos de fila e o shape de `ProcessingJobRequestedMessage` permaneceram inalterados.
+- Os fluxos de `submit`, `reprocess`, `replay`, retry e DLQ foram preservados semanticamente; a mudanca desta fase foi estrutural.
+- Os quatro gates de raiz fecharam verdes ao final da fase: `lint`, `typecheck`, `build` e `test`.
+
+### Commit Contexts
+
+- `feat(orchestrator-common-services)`
+- `feat(orchestrator-structural-refactor)`
+- `bug(orchestrator-cleanup-tests)`
+- `feat(worker-processing-services-a)`
+- `feat(worker-processing-services-b)`
+- `bug(worker-usecase-cleanup)`
+- `feat(worker-processing-tests)`
+- `feat(worker-pipeline-stages-a)`
+- `feat(worker-pipeline-stages-b)`
+- `bug(worker-pipeline-contracts)`
+- `bug(worker-pipeline-golden)`
+- `bug(shared-lint-retention)`
+- `docs(changelog)`
+
 ## [2026-03-25] - Corretude de resultados, reuso deduplicado e DLQ de contexto
 
 ### Added
