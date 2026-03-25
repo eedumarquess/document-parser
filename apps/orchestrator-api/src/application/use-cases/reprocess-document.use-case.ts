@@ -1,62 +1,37 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { DEFAULT_PROCESSING_QUEUE_NAME } from '@document-parser/shared-kernel';
 import {
-  VersionStampService,
-  createPendingAttempt,
-  createReprocessingJob,
-  markAttemptAsQueued,
-  markJobAsQueued,
-  markJobAsStored,
-  markJobAsValidated,
-  recordJobError,
-  type JobAttemptRecord
-} from '@document-parser/document-processing-domain';
-import {
-  DEFAULT_PROCESSING_QUEUE_NAME,
-  ErrorCode,
   NotFoundError,
   RedactionPolicyService,
-  TransientFailureError,
-  type AuditActor,
-  type ProcessingJobRequestedMessage,
-  ValidationError
+  ValidationError,
+  type AuditActor
 } from '@document-parser/shared-kernel';
 import type { JobResponse } from '../../contracts/http';
-import type { ProcessingJobRecord } from '../../contracts/models';
 import type {
-  AuditPort,
   AuthorizationPort,
   ClockPort,
-  IdGeneratorPort,
-  JobAttemptRepositoryPort,
-  JobPublisherPort,
   LoggingPort,
   MetricsPort,
   ProcessingJobRepositoryPort,
-  TracingPort,
-  UnitOfWorkPort
+  TracingPort
 } from '../../contracts/ports';
 import { TOKENS } from '../../contracts/tokens';
-import { RetentionPolicyService } from '../../domain/services/retention-policy.service';
+import { AuditEventRecorder } from '../services/audit-event-recorder.service';
+import { DerivedJobOrchestrator } from '../services/derived-job-orchestrator.service';
 import type { ReprocessDocumentCommand } from '../commands/reprocess-document.command';
 
 @Injectable()
 export class ReprocessDocumentUseCase {
-  private readonly versionStamps = new VersionStampService();
-
   public constructor(
     @Inject(TOKENS.AUTHORIZATION) private readonly authorization: AuthorizationPort,
     @Inject(TOKENS.CLOCK) private readonly clock: ClockPort,
-    @Inject(TOKENS.ID_GENERATOR) private readonly idGenerator: IdGeneratorPort,
     @Inject(TOKENS.JOB_REPOSITORY) private readonly jobs: ProcessingJobRepositoryPort,
-    @Inject(TOKENS.ATTEMPT_REPOSITORY) private readonly attempts: JobAttemptRepositoryPort,
-    @Inject(TOKENS.JOB_PUBLISHER) private readonly publisher: JobPublisherPort,
-    @Inject(TOKENS.AUDIT) private readonly audit: AuditPort,
     @Inject(TOKENS.LOGGING) private readonly logging: LoggingPort,
     @Inject(TOKENS.METRICS) private readonly metrics: MetricsPort,
     @Inject(TOKENS.TRACING) private readonly tracing: TracingPort,
-    @Inject(TOKENS.UNIT_OF_WORK) private readonly unitOfWork: UnitOfWorkPort,
-    private readonly retentionPolicy: RetentionPolicyService,
-    private readonly redactionPolicy: RedactionPolicyService
+    private readonly redactionPolicy: RedactionPolicyService,
+    private readonly auditEventRecorder: AuditEventRecorder,
+    private readonly derivedJobOrchestrator: DerivedJobOrchestrator
   ) {}
 
   public async execute(command: ReprocessDocumentCommand, actor: AuditActor, traceId: string): Promise<JobResponse> {
@@ -84,104 +59,54 @@ export class ReprocessDocumentUseCase {
           }
 
           const now = this.clock.now();
-          const { pipelineVersion, outputVersion } = this.versionStamps.buildJobStamp({
-            pipelineVersion: originalJob.pipelineVersion,
-            outputVersion: originalJob.outputVersion
-          });
-          const validatedJob = markJobAsValidated({
-            job: createReprocessingJob({
-              jobId: this.idGenerator.next('job'),
-              documentId: originalJob.documentId,
-              requestedMode: originalJob.requestedMode,
-              queueName: DEFAULT_PROCESSING_QUEUE_NAME,
-              pipelineVersion,
-              outputVersion,
-              requestedBy: actor,
-              reprocessOfJobId: originalJob.jobId,
-              now
-            }),
-            now
-          });
-          const reprocessedJob = markJobAsStored({
-            job: validatedJob,
-            now
-          });
-          const attempt = createPendingAttempt({
-            attemptId: this.idGenerator.next('attempt'),
-            jobId: reprocessedJob.jobId,
-            attemptNumber: 1,
-            pipelineVersion: reprocessedJob.pipelineVersion,
-            now
-          });
-
-          await this.unitOfWork.runInTransaction(async () => {
-            await this.jobs.save(reprocessedJob);
-            await this.attempts.save(attempt);
-            await this.recordAuditEvent({
-              eventType: 'JOB_REPROCESSING_REQUESTED',
-              aggregateType: 'PROCESSING_JOB',
-              aggregateId: reprocessedJob.jobId,
-              traceId,
-              actor,
-              metadata: {
-                jobId: reprocessedJob.jobId,
-                reprocessOfJobId: originalJob.jobId,
-                reason: command.reason
-              },
-              createdAt: now
-            });
-          });
-
-          const message: ProcessingJobRequestedMessage = {
-            documentId: originalJob.documentId,
-            jobId: reprocessedJob.jobId,
-            attemptId: attempt.attemptId,
+          const derived = await this.derivedJobOrchestrator.execute({
+            actor,
+            originalJob,
+            queueName: DEFAULT_PROCESSING_QUEUE_NAME,
             traceId,
-            requestedMode: originalJob.requestedMode,
-            pipelineVersion: originalJob.pipelineVersion,
-            publishedAt: now.toISOString()
-          };
-
-          try {
-            await this.publisher.publishRequested(message);
-          } catch (error) {
-            await this.markJobAsPublishFailed({
-              actor,
-              job: reprocessedJob,
-              traceId,
-              now,
-              errorMessage: error instanceof Error ? error.message : 'Unexpected queue publishing failure'
-            });
-            throw new TransientFailureError('Reprocessing job persisted but queue publication failed', {
-              jobId: reprocessedJob.jobId,
-              documentId: reprocessedJob.documentId
-            });
-          }
-
-          const queuedJob = markJobAsQueued({
-            job: reprocessedJob,
-            now
-          });
-          const queuedAttempt = markAttemptAsQueued({
-            attempt
-          });
-
-          await this.unitOfWork.runInTransaction(async () => {
-            await this.jobs.save(queuedJob);
-            await this.attempts.save(queuedAttempt);
-            await this.recordAuditEvent({
-              eventType: 'PROCESSING_JOB_QUEUED',
-              aggregateType: 'PROCESSING_JOB',
-              aggregateId: queuedJob.jobId,
-              traceId,
-              actor,
-              metadata: {
-                jobId: queuedJob.jobId,
-                reprocessOfJobId: originalJob.jobId,
-                attemptId: queuedAttempt.attemptId
-              },
-              createdAt: now
-            });
+            now,
+            onStored: async ({ job }) => {
+              await this.auditEventRecorder.record({
+                eventType: 'JOB_REPROCESSING_REQUESTED',
+                aggregateType: 'PROCESSING_JOB',
+                aggregateId: job.jobId,
+                traceId,
+                actor,
+                metadata: {
+                  jobId: job.jobId,
+                  reprocessOfJobId: originalJob.jobId,
+                  reason: command.reason
+                },
+                createdAt: now
+              });
+            },
+            onQueued: async ({ queuedJob, queuedAttempt }) => {
+              await this.auditEventRecorder.record({
+                eventType: 'PROCESSING_JOB_QUEUED',
+                aggregateType: 'PROCESSING_JOB',
+                aggregateId: queuedJob.jobId,
+                traceId,
+                actor,
+                metadata: {
+                  jobId: queuedJob.jobId,
+                  reprocessOfJobId: originalJob.jobId,
+                  attemptId: queuedAttempt.attemptId
+                },
+                createdAt: now
+              });
+            },
+            publishFailure: {
+              eventType: 'PROCESSING_JOB_QUEUEING_FAILED',
+              failureMessage: 'Reprocessing job persisted but queue publication failed',
+              context: ({ job }) => ({
+                jobId: job.jobId,
+                documentId: job.documentId
+              }),
+              metadata: ({ job, errorMessage }) => ({
+                jobId: job.jobId,
+                errorMessage
+              })
+            }
           });
 
           await this.logging.log({
@@ -190,9 +115,9 @@ export class ReprocessDocumentUseCase {
             context: 'ReprocessDocumentUseCase',
             traceId,
             data: this.redactionPolicy.redact({
-              jobId: queuedJob.jobId,
+              jobId: derived.queuedJob.jobId,
               reprocessOfJobId: originalJob.jobId
-            }) as Record<string, unknown>,
+            }),
             recordedAt: now
           });
           await this.metrics.increment({
@@ -200,16 +125,7 @@ export class ReprocessDocumentUseCase {
             traceId
           });
 
-          return {
-            jobId: queuedJob.jobId,
-            documentId: queuedJob.documentId,
-            status: queuedJob.status,
-            requestedMode: queuedJob.requestedMode,
-            pipelineVersion: queuedJob.pipelineVersion,
-            outputVersion: queuedJob.outputVersion,
-            reusedResult: queuedJob.reusedResult,
-            createdAt: queuedJob.createdAt.toISOString()
-          };
+          return toJobResponse(derived.queuedJob);
         } catch (error) {
           await this.metrics.increment({
             name: 'orchestrator.reprocess_document.failed',
@@ -224,7 +140,7 @@ export class ReprocessDocumentUseCase {
               actorId: actor.actorId,
               jobId: command.jobId,
               errorMessage: error instanceof Error ? error.message : 'Unexpected failure'
-            }) as Record<string, unknown>,
+            }),
             recordedAt: this.clock.now()
           });
           throw error;
@@ -238,63 +154,26 @@ export class ReprocessDocumentUseCase {
       }
     );
   }
+}
 
-  private async markJobAsPublishFailed(input: {
-    actor: AuditActor;
-    job: ProcessingJobRecord;
-    traceId: string;
-    now: Date;
-    errorMessage: string;
-  }): Promise<void> {
-    const failedJob = recordJobError({
-      job: input.job,
-      errorCode: ErrorCode.TRANSIENT_FAILURE,
-      errorMessage: input.errorMessage,
-      now: input.now
-    });
-
-    await this.unitOfWork.runInTransaction(async () => {
-      await this.jobs.save(failedJob);
-      await this.recordAuditEvent({
-        eventType: 'PROCESSING_JOB_QUEUEING_FAILED',
-        aggregateType: 'PROCESSING_JOB',
-        aggregateId: input.job.jobId,
-        traceId: input.traceId,
-        actor: input.actor,
-        metadata: {
-          jobId: input.job.jobId,
-          errorMessage: input.errorMessage
-        },
-        createdAt: input.now
-      });
-    });
-  }
-
-  private async recordAuditEvent(input: {
-    eventType: string;
-    aggregateType?: string;
-    aggregateId?: string;
-    traceId: string;
-    actor: AuditActor;
-    metadata?: Record<string, unknown>;
-    redactedPayload?: Record<string, unknown>;
-    createdAt: Date;
-  }): Promise<void> {
-    await this.audit.record({
-      eventId: this.idGenerator.next('audit'),
-      eventType: input.eventType,
-      aggregateType: input.aggregateType,
-      aggregateId: input.aggregateId,
-      traceId: input.traceId,
-      actor: input.actor,
-      metadata: input.metadata,
-      redactedPayload:
-        input.redactedPayload ??
-        (input.metadata === undefined
-          ? undefined
-          : (this.redactionPolicy.redact(input.metadata) as Record<string, unknown>)),
-      createdAt: input.createdAt,
-      retentionUntil: this.retentionPolicy.calculateAuditRetentionUntil(input.createdAt)
-    });
-  }
+function toJobResponse(job: {
+  jobId: string;
+  documentId: string;
+  status: JobResponse['status'];
+  requestedMode: string;
+  pipelineVersion: string;
+  outputVersion: string;
+  reusedResult: boolean;
+  createdAt: Date;
+}): JobResponse {
+  return {
+    jobId: job.jobId,
+    documentId: job.documentId,
+    status: job.status,
+    requestedMode: job.requestedMode,
+    pipelineVersion: job.pipelineVersion,
+    outputVersion: job.outputVersion,
+    reusedResult: job.reusedResult,
+    createdAt: job.createdAt.toISOString()
+  };
 }

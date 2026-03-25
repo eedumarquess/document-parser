@@ -8,14 +8,12 @@ import {
   markJobAsQueued,
   markJobAsStored,
   markJobAsValidated,
-  recordJobError,
   type JobAttemptRecord
 } from '@document-parser/document-processing-domain';
 import {
   DEFAULT_PROCESSING_QUEUE_NAME,
   DEFAULT_OUTPUT_VERSION,
   DEFAULT_PIPELINE_VERSION,
-  ErrorCode,
   JobStatus,
   RedactionPolicyService,
   TransientFailureError,
@@ -26,7 +24,6 @@ import {
 import type { JobResponse } from '../../contracts/http';
 import type { DocumentRecord, ProcessingJobRecord, ProcessingResultRecord } from '../../contracts/models';
 import type {
-  AuditPort,
   AuthorizationPort,
   BinaryStoragePort,
   ClockPort,
@@ -52,6 +49,8 @@ import { PageCountPolicy } from '../../domain/policies/page-count.policy';
 import { RetentionPolicyService } from '../../domain/services/retention-policy.service';
 import { CompatibilityKey } from '../../domain/value-objects/compatibility-key';
 import { DocumentHash } from '../../domain/value-objects/document-hash';
+import { AuditEventRecorder } from '../services/audit-event-recorder.service';
+import { QueuePublicationFailureHandler } from '../services/queue-publication-failure-handler.service';
 import type { SubmitDocumentCommand } from '../commands/submit-document.command';
 
 @Injectable()
@@ -72,7 +71,6 @@ export class SubmitDocumentUseCase {
     @Inject(TOKENS.COMPATIBLE_RESULT_LOOKUP)
     private readonly compatibleResults: CompatibleResultLookupPort,
     @Inject(TOKENS.JOB_PUBLISHER) private readonly publisher: JobPublisherPort,
-    @Inject(TOKENS.AUDIT) private readonly audit: AuditPort,
     @Inject(TOKENS.LOGGING) private readonly logging: LoggingPort,
     @Inject(TOKENS.METRICS) private readonly metrics: MetricsPort,
     @Inject(TOKENS.TRACING) private readonly tracing: TracingPort,
@@ -82,7 +80,9 @@ export class SubmitDocumentUseCase {
     private readonly pageCountPolicy: PageCountPolicy,
     private readonly documentStoragePolicy: DocumentStoragePolicy,
     private readonly retentionPolicy: RetentionPolicyService,
-    private readonly redactionPolicy: RedactionPolicyService
+    private readonly redactionPolicy: RedactionPolicyService,
+    private readonly auditEventRecorder: AuditEventRecorder,
+    private readonly queuePublicationFailureHandler: QueuePublicationFailureHandler
   ) {}
 
   public async execute(command: SubmitDocumentCommand, actor: AuditActor, traceId: string): Promise<JobResponse> {
@@ -128,12 +128,15 @@ export class SubmitDocumentUseCase {
             forceReprocess: command.forceReprocess
           });
 
-          if (this.reusePolicy.shouldReuse({ compatibleResult, forceReprocess: command.forceReprocess })) {
+          if (
+            compatibleResult !== undefined &&
+            this.reusePolicy.shouldReuse({ compatibleResult, forceReprocess: command.forceReprocess })
+          ) {
             const response = await this.finalizeDeduplicatedJob({
               actor,
-              compatibleResult: compatibleResult as ProcessingResultRecord,
+              compatibleResult,
               compatibilityKey,
-              documentId: existingDocument?.documentId ?? (compatibleResult as ProcessingResultRecord).documentId,
+              documentId: existingDocument?.documentId ?? compatibleResult.documentId,
               requestedMode,
               pipelineVersion,
               outputVersion,
@@ -150,7 +153,7 @@ export class SubmitDocumentUseCase {
                 jobId: response.jobId,
                 documentId: response.documentId,
                 reusedResult: response.reusedResult
-              }) as Record<string, unknown>,
+              }),
               recordedAt: now
             });
             await this.metrics.increment({
@@ -191,12 +194,18 @@ export class SubmitDocumentUseCase {
               publishedAt: now.toISOString()
             });
           } catch (error) {
-            await this.markJobAsPublishFailed({
+            await this.queuePublicationFailureHandler.handle({
               actor,
               job: persistedSubmission.job,
               traceId,
               now,
-              errorMessage: this.buildPublishErrorMessage(error)
+              errorMessage: this.buildPublishErrorMessage(error),
+              eventType: 'PROCESSING_JOB_QUEUEING_FAILED',
+              metadata: {
+                documentId: persistedSubmission.job.documentId,
+                jobId: persistedSubmission.job.jobId,
+                errorMessage: this.buildPublishErrorMessage(error)
+              }
             });
             throw new TransientFailureError('Processing job persisted but queue publication failed', {
               jobId: persistedSubmission.job.jobId,
@@ -221,7 +230,7 @@ export class SubmitDocumentUseCase {
               jobId: queuedJob.jobId,
               documentId: queuedJob.documentId,
               requestedMode: queuedJob.requestedMode
-            }) as Record<string, unknown>,
+            }),
             recordedAt: now
           });
           await this.metrics.increment({
@@ -244,7 +253,7 @@ export class SubmitDocumentUseCase {
               actorId: actor.actorId,
               requestedMode: command.requestedMode,
               errorMessage: error instanceof Error ? error.message : 'Unexpected failure'
-            }) as Record<string, unknown>,
+            }),
             recordedAt: this.clock.now()
           });
           throw error;
@@ -379,7 +388,7 @@ export class SubmitDocumentUseCase {
       await this.unitOfWork.runInTransaction(async () => {
         if (input.storedNewBinary) {
           await this.documents.save(input.document);
-          await this.recordAuditEvent({
+          await this.auditEventRecorder.record({
             eventType: 'DOCUMENT_STORED',
             aggregateType: 'DOCUMENT',
             aggregateId: input.document.documentId,
@@ -395,7 +404,7 @@ export class SubmitDocumentUseCase {
 
         await this.jobs.save(job);
         await this.attempts.save(attempt);
-        await this.recordAuditEvent({
+        await this.auditEventRecorder.record({
           eventType: 'DOCUMENT_ACCEPTED',
           aggregateType: 'PROCESSING_JOB',
           aggregateId: job.jobId,
@@ -442,7 +451,7 @@ export class SubmitDocumentUseCase {
     await this.unitOfWork.runInTransaction(async () => {
       await this.jobs.save(queuedJob);
       await this.attempts.save(queuedAttempt);
-      await this.recordAuditEvent({
+      await this.auditEventRecorder.record({
         eventType: 'PROCESSING_JOB_QUEUED',
         aggregateType: 'PROCESSING_JOB',
         aggregateId: input.job.jobId,
@@ -509,7 +518,7 @@ export class SubmitDocumentUseCase {
         updatedAt: input.now,
         retentionUntil: this.retentionPolicy.calculateProcessingResultRetentionUntil(input.now)
       });
-      await this.recordAuditEvent({
+      await this.auditEventRecorder.record({
         eventType: 'COMPATIBLE_RESULT_REUSED',
         aggregateType: 'PROCESSING_JOB',
         aggregateId: job.jobId,
@@ -526,38 +535,6 @@ export class SubmitDocumentUseCase {
     });
 
     return this.toJobResponse(job);
-  }
-
-  private async markJobAsPublishFailed(input: {
-    actor: AuditActor;
-    job: ProcessingJobRecord;
-    traceId: string;
-    now: Date;
-    errorMessage: string;
-  }): Promise<void> {
-    const failedJob = recordJobError({
-      job: input.job,
-      errorCode: ErrorCode.TRANSIENT_FAILURE,
-      errorMessage: input.errorMessage,
-      now: input.now
-    });
-
-    await this.unitOfWork.runInTransaction(async () => {
-      await this.jobs.save(failedJob);
-      await this.recordAuditEvent({
-        eventType: 'PROCESSING_JOB_QUEUEING_FAILED',
-        aggregateType: 'PROCESSING_JOB',
-        aggregateId: input.job.jobId,
-        traceId: input.traceId,
-        actor: input.actor,
-        metadata: {
-          documentId: input.job.documentId,
-          jobId: input.job.jobId,
-          errorMessage: input.errorMessage
-        },
-        createdAt: input.now
-      });
-    });
   }
 
   private buildPublishErrorMessage(error: unknown): string {
@@ -584,33 +561,5 @@ export class SubmitDocumentUseCase {
       reusedResult: job.reusedResult,
       createdAt: job.createdAt.toISOString()
     };
-  }
-
-  private async recordAuditEvent(input: {
-    eventType: string;
-    aggregateType?: string;
-    aggregateId?: string;
-    traceId: string;
-    actor: AuditActor;
-    metadata?: Record<string, unknown>;
-    redactedPayload?: Record<string, unknown>;
-    createdAt: Date;
-  }): Promise<void> {
-    await this.audit.record({
-      eventId: this.idGenerator.next('audit'),
-      eventType: input.eventType,
-      aggregateType: input.aggregateType,
-      aggregateId: input.aggregateId,
-      traceId: input.traceId,
-      actor: input.actor,
-      metadata: input.metadata,
-      redactedPayload:
-        input.redactedPayload ??
-        (input.metadata === undefined
-          ? undefined
-          : this.redactionPolicy.redact(input.metadata)),
-      createdAt: input.createdAt,
-      retentionUntil: this.retentionPolicy.calculateAuditRetentionUntil(input.createdAt)
-    });
   }
 }
