@@ -25,6 +25,11 @@ import {
   InMemoryProcessingResultRepository,
   InMemoryUnitOfWork
 } from '../../src/adapters/out/repositories/in-memory.repositories';
+import { AuditEventRecorder } from '../../src/application/services/audit-event-recorder.service';
+import { AttemptExecutionCoordinator } from '../../src/application/services/attempt-execution-coordinator.service';
+import { ProcessingContextLoader } from '../../src/application/services/processing-context-loader.service';
+import { ProcessingFailureRecoveryService } from '../../src/application/services/processing-failure-recovery.service';
+import { ProcessingSuccessPersister } from '../../src/application/services/processing-success-persister.service';
 import { ProcessJobMessageUseCase } from '../../src/application/use-cases/process-job-message.use-case';
 import { ProcessingOutcomePolicy } from '../../src/domain/policies/processing-outcome.policy';
 import { RetryPolicyService } from '../../src/domain/policies/retry-policy.service';
@@ -78,6 +83,7 @@ const createWorkerContext = async (buffer: Buffer, optionsOrAttemptNumber: Worke
   const metrics = new InMemoryMetricsAdapter();
   const tracing = new InMemoryTracingAdapter();
   const extraction = createDefaultExtractionPipeline(new ProcessingOutcomePolicy());
+  const unitOfWork = new InMemoryUnitOfWork();
   const retentionPolicy = new RetentionPolicyService();
   const redactionPolicy = new RedactionPolicyService();
   const pageCount = Math.max(1, buffer.toString('utf8').split('[[PAGE_BREAK]]').length);
@@ -155,26 +161,37 @@ const createWorkerContext = async (buffer: Buffer, optionsOrAttemptNumber: Worke
     metrics,
     tracing,
     extraction,
+    unitOfWork,
     useCase: new ProcessJobMessageUseCase(
       clock,
-      idGenerator,
-      storage,
-      documents,
-      jobs,
-      attempts,
-      results,
-      artifacts,
-      deadLetters,
-      audit,
       logging,
       metrics,
       tracing,
-      publisher,
-      new InMemoryUnitOfWork(),
-      extraction,
-      new RetryPolicyService(),
-      retentionPolicy,
-      redactionPolicy
+      redactionPolicy,
+      new ProcessingContextLoader(jobs, documents, attempts),
+      new AttemptExecutionCoordinator(storage, jobs, attempts, unitOfWork, extraction),
+      new ProcessingSuccessPersister(
+        idGenerator,
+        jobs,
+        attempts,
+        results,
+        artifacts,
+        unitOfWork,
+        retentionPolicy,
+        new AuditEventRecorder(audit, idGenerator, retentionPolicy, redactionPolicy)
+      ),
+      new ProcessingFailureRecoveryService(
+        idGenerator,
+        jobs,
+        attempts,
+        deadLetters,
+        publisher,
+        unitOfWork,
+        new RetryPolicyService(),
+        retentionPolicy,
+        redactionPolicy,
+        new AuditEventRecorder(audit, idGenerator, retentionPolicy, redactionPolicy)
+      )
     )
   };
 };
