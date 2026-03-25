@@ -64,14 +64,27 @@ export class InMemoryJobAttemptRepository implements JobAttemptRepositoryPort {
 
 @Injectable()
 export class InMemoryProcessingResultRepository implements ProcessingResultRepositoryPort {
-  private readonly results = new Map<string, ProcessingResultRecord>();
+  private readonly resultsByJobId = new Map<string, ProcessingResultRecord>();
+  private readonly jobIdByResultId = new Map<string, string>();
 
   public async save(result: ProcessingResultRecord): Promise<void> {
-    this.results.set(result.resultId, result);
+    const existingJobIdForResultId = this.jobIdByResultId.get(result.resultId);
+    if (existingJobIdForResultId !== undefined && existingJobIdForResultId !== result.jobId) {
+      this.resultsByJobId.delete(existingJobIdForResultId);
+      this.jobIdByResultId.delete(result.resultId);
+    }
+
+    const existingResultForJob = this.resultsByJobId.get(result.jobId);
+    if (existingResultForJob !== undefined && existingResultForJob.resultId !== result.resultId) {
+      this.jobIdByResultId.delete(existingResultForJob.resultId);
+    }
+
+    this.resultsByJobId.set(result.jobId, result);
+    this.jobIdByResultId.set(result.resultId, result.jobId);
   }
 
   public async findByJobId(jobId: string): Promise<ProcessingResultRecord | undefined> {
-    return [...this.results.values()].find((result) => result.jobId === jobId);
+    return this.resultsByJobId.get(jobId);
   }
 }
 
