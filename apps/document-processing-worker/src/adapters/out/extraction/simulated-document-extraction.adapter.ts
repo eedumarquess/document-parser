@@ -13,9 +13,12 @@ import {
 } from '@document-parser/shared-kernel';
 import type { ExtractionPipelinePort } from '../../../contracts/ports';
 import { ProcessingOutcomePolicy } from '../../../domain/policies/processing-outcome.policy';
+import { SensitiveDataMaskingService } from '../../../domain/extraction/sensitive-data-masking.service';
 
 @Injectable()
 export class SimulatedDocumentExtractionAdapter implements ExtractionPipelinePort {
+  private readonly maskingService = new SensitiveDataMaskingService();
+
   public constructor(private readonly outcomePolicy: ProcessingOutcomePolicy) {}
 
   public async extract(input: Parameters<ExtractionPipelinePort['extract']>[0]): Promise<ProcessingOutcome> {
@@ -36,7 +39,7 @@ export class SimulatedDocumentExtractionAdapter implements ExtractionPipelinePor
     const payload = cleanedText === '' ? '[ilegivel]' : cleanedText;
     const warnings = payload.includes('[ilegivel]') ? [ExtractionWarning.ILLEGIBLE_CONTENT] : [];
     const status = this.outcomePolicy.decide({ payload, warnings });
-    const maskedText = payload.replaceAll(/\d/g, '*');
+    const maskedText = this.maskingService.maskForExternalLlm(payload).maskedText;
 
     return {
       status,

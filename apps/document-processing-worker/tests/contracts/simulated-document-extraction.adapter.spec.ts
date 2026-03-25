@@ -55,14 +55,14 @@ describe('SimulatedDocumentExtractionAdapter contract', () => {
     }
   };
 
-  it('masks digits in the masked artifact metadata', async () => {
+  it('stores reversible placeholders in the masked artifact metadata instead of erasing all digits', async () => {
     const outcome = await adapter.extract({
       ...baseInput,
-      original: Buffer.from('cpf 123456 [[LLM]]')
+      original: Buffer.from('cpf 123.456.789-00 [[LLM]]')
     });
 
     const maskedArtifact = outcome.artifacts.find((artifact) => artifact.artifactType === 'MASKED_TEXT');
-    expect(maskedArtifact?.metadata).toEqual({ maskedText: 'cpf ******' });
+    expect(maskedArtifact?.metadata).toEqual({ maskedText: 'cpf [cpf_1]' });
   });
 
   it('marks illegible payloads as PARTIAL', async () => {
@@ -78,7 +78,7 @@ describe('SimulatedDocumentExtractionAdapter contract', () => {
   it('stamps a canonical fallback reason when fallback is used', async () => {
     const outcome = await adapter.extract({
       ...baseInput,
-      original: Buffer.from('cpf 123456 [[LLM]]')
+      original: Buffer.from('cpf 123.456.789-00 [[LLM]]')
     });
 
     expect(outcome.fallbackReason).toBe(FallbackReason.LOW_GLOBAL_CONFIDENCE);
