@@ -106,6 +106,7 @@ export class ProcessJobMessageUseCase {
           resultId: this.idGenerator.next('result'),
           jobId: job.jobId,
           documentId: document.documentId,
+          hash: document.hash,
           requestedMode: job.requestedMode,
           pipelineVersion: job.pipelineVersion,
           outputVersion: job.outputVersion,
