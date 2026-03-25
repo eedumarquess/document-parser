@@ -73,7 +73,8 @@ export interface UnitOfWorkPort {
 }
 
 export interface JobPublisherPort {
-  publish(message: ProcessingJobRequestedMessage): Promise<void>;
+  publishRequested(message: ProcessingJobRequestedMessage): Promise<void>;
+  publishRetry(message: ProcessingJobRequestedMessage, retryAttempt: number): Promise<void>;
 }
 
 export interface AuditPort {
