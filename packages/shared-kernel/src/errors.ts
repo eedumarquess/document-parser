@@ -54,3 +54,9 @@ export class FatalFailureError extends ApplicationError {
   }
 }
 
+export class TimeoutFailureError extends ApplicationError {
+  public constructor(message: string, metadata?: Record<string, unknown>) {
+    super(ErrorCode.TIMEOUT, message, 504, metadata);
+    this.name = 'TimeoutFailureError';
+  }
+}

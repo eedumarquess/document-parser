@@ -12,10 +12,14 @@ export enum JobStatus {
 }
 
 export enum AttemptStatus {
+  PENDING = 'PENDING',
   QUEUED = 'QUEUED',
   PROCESSING = 'PROCESSING',
   COMPLETED = 'COMPLETED',
-  FAILED = 'FAILED'
+  PARTIAL = 'PARTIAL',
+  FAILED = 'FAILED',
+  TIMED_OUT = 'TIMED_OUT',
+  MOVED_TO_DLQ = 'MOVED_TO_DLQ'
 }
 
 export enum ErrorCode {
@@ -40,4 +44,3 @@ export enum ArtifactType {
   OCR_JSON = 'OCR_JSON',
   MASKED_TEXT = 'MASKED_TEXT'
 }
-
