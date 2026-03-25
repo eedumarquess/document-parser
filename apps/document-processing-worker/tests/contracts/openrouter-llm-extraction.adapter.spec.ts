@@ -5,7 +5,11 @@ import { OpenRouterLlmExtractionAdapter } from '../../src/adapters/out/extractio
 describe('OpenRouterLlmExtractionAdapter contract', () => {
   it('maps chat completions into deterministic target responses', async () => {
     const fetchMock: typeof fetch = jest.fn(async (_url, init) => {
-      expect(String(init?.body)).toContain('Recover the best possible text');
+      expect(typeof init?.body).toBe('string');
+      if (typeof init?.body !== 'string') {
+        throw new Error('Expected serialized request body');
+      }
+      expect(init.body).toContain('Recover the best possible text');
 
       return new Response(
         JSON.stringify({

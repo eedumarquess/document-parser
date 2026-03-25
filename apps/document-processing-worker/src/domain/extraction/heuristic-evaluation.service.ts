@@ -1,6 +1,7 @@
-import { ExtractionWarning, FallbackReason, type JobWarning } from '@document-parser/shared-kernel';
+import { ExtractionWarning, FallbackReason } from '@document-parser/shared-kernel';
+import type { JobWarning } from '@document-parser/shared-kernel';
 import type { FallbackTarget, PageExtraction, RenderedPage } from './extraction.types';
-import { TextNormalizationService } from './text-normalization.service';
+import type { TextNormalizationService } from './text-normalization.service';
 
 const PAGE_CONFIDENCE_FALLBACK_THRESHOLD = 0.45;
 
