@@ -119,6 +119,7 @@ describe('DocumentProcessingWorkerModule e2e', () => {
       documentId: 'doc-1',
       jobId: 'job-1',
       attemptId: 'attempt-1',
+      traceId: 'trace-worker-e2e-1',
       requestedMode: 'STANDARD',
       pipelineVersion: DEFAULT_PIPELINE_VERSION,
       publishedAt: clock.now().toISOString()

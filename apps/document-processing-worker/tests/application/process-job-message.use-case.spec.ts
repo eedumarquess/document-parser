@@ -5,7 +5,12 @@ import {
   ErrorCode,
   ExtractionWarning,
   FallbackReason,
+  InMemoryLoggingAdapter,
+  InMemoryMetricsAdapter,
+  InMemoryTracingAdapter,
   JobStatus,
+  RedactionPolicyService,
+  RetentionPolicyService,
   Role
 } from '@document-parser/shared-kernel';
 import { FixedClock, IncrementalIdGenerator, InMemoryPublishedMessageBus, buildActor } from '@document-parser/testkit';
@@ -61,7 +66,12 @@ const createWorkerContext = async (buffer: Buffer, attemptNumber = 1) => {
   const deadLetters = new InMemoryDeadLetterRepository();
   const audit = new InMemoryAuditRepository();
   const publisher = new InMemoryPublishedMessageBus();
+  const logging = new InMemoryLoggingAdapter();
+  const metrics = new InMemoryMetricsAdapter();
+  const tracing = new InMemoryTracingAdapter();
   const extraction = createDefaultExtractionPipeline(new ProcessingOutcomePolicy());
+  const retentionPolicy = new RetentionPolicyService();
+  const redactionPolicy = new RedactionPolicyService();
   const pageCount = Math.max(1, buffer.toString('utf8').split('[[PAGE_BREAK]]').length);
 
   const storageReference = await storage.storeOriginal({
@@ -127,6 +137,9 @@ const createWorkerContext = async (buffer: Buffer, attemptNumber = 1) => {
     deadLetters,
     audit,
     publisher,
+    logging,
+    metrics,
+    tracing,
     extraction,
     useCase: new ProcessJobMessageUseCase(
       clock,
@@ -139,10 +152,15 @@ const createWorkerContext = async (buffer: Buffer, attemptNumber = 1) => {
       artifacts,
       deadLetters,
       audit,
+      logging,
+      metrics,
+      tracing,
       publisher,
       new InMemoryUnitOfWork(),
       extraction,
-      new RetryPolicyService()
+      new RetryPolicyService(),
+      retentionPolicy,
+      redactionPolicy
     )
   };
 };
@@ -153,6 +171,7 @@ const executeMessage = async (context: Awaited<ReturnType<typeof createWorkerCon
       documentId: context.documentId,
       jobId: context.jobId,
       attemptId: context.attemptId,
+      traceId: 'trace-worker-1',
       requestedMode: 'STANDARD',
       pipelineVersion: DEFAULT_PIPELINE_VERSION,
       publishedAt: context.clock.now().toISOString()
@@ -237,6 +256,9 @@ describe('ProcessJobMessageUseCase', () => {
       status: JobStatus.QUEUED
     });
     expect(context.publisher.messages).toHaveLength(1);
+    expect(context.publisher.messages[0]).toMatchObject({
+      traceId: 'trace-worker-1'
+    });
     expect(await context.attempts.findById(context.attemptId)).toMatchObject({
       status: AttemptStatus.FAILED,
       errorCode: ErrorCode.TRANSIENT_FAILURE
@@ -251,7 +273,11 @@ describe('ProcessJobMessageUseCase', () => {
     expect(await context.jobs.findById(context.jobId)).toMatchObject({
       status: JobStatus.FAILED
     });
-    expect(await context.deadLetters.list()).toHaveLength(1);
+    await expect(context.deadLetters.list()).resolves.toEqual([
+      expect.objectContaining({
+        traceId: 'trace-worker-1'
+      })
+    ]);
     expect(context.publisher.messages).toHaveLength(0);
   });
 });
