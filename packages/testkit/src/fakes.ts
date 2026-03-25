@@ -19,8 +19,14 @@ export class IncrementalIdGenerator {
 
 export class InMemoryPublishedMessageBus {
   public readonly messages: ProcessingJobRequestedMessage[] = [];
+  public readonly retryMessages: Array<{ message: ProcessingJobRequestedMessage; retryAttempt: number }> = [];
 
-  public async publish(message: ProcessingJobRequestedMessage): Promise<void> {
+  public async publishRequested(message: ProcessingJobRequestedMessage): Promise<void> {
+    this.messages.push(message);
+  }
+
+  public async publishRetry(message: ProcessingJobRequestedMessage, retryAttempt: number): Promise<void> {
+    this.retryMessages.push({ message, retryAttempt });
     this.messages.push(message);
   }
 }
@@ -37,4 +43,3 @@ export class InMemoryAuditTrail {
     this.entries.push({ eventType, actor, metadata });
   }
 }
-

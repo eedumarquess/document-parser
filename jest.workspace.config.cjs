@@ -11,6 +11,8 @@ const commonProjectConfig = {
   testEnvironment: 'node',
   collectCoverageFrom: ['src/**/*.ts'],
   moduleNameMapper: {
+    '^@document-parser/document-processing-domain$':
+      '<rootDir>/../../packages/document-processing-domain/src',
     '^@document-parser/shared-kernel$': '<rootDir>/../../packages/shared-kernel/src',
     '^@document-parser/testkit$': '<rootDir>/../../packages/testkit/src'
   }
