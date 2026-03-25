@@ -1,4 +1,13 @@
-import { AuthorizationError, DEFAULT_OUTPUT_VERSION, DEFAULT_PIPELINE_VERSION, JobStatus, Role, TransientFailureError } from '@document-parser/shared-kernel';
+import {
+  AuthorizationError,
+  DEFAULT_OUTPUT_VERSION,
+  DEFAULT_PIPELINE_VERSION,
+  JobStatus,
+  NotFoundError,
+  Role,
+  TransientFailureError,
+  ValidationError
+} from '@document-parser/shared-kernel';
 import { FixedClock, IncrementalIdGenerator, buildActor, buildUploadedFile } from '@document-parser/testkit';
 import { InMemoryJobPublisherAdapter } from '../../src/adapters/out/queue/in-memory-job-publisher.adapter';
 import {
@@ -110,6 +119,18 @@ const createSubmitDocumentUseCase = (overrides: Partial<{
     )
   };
 };
+
+const createReprocessUseCase = (context: ReturnType<typeof createSubmitDocumentUseCase>) =>
+  new ReprocessDocumentUseCase(
+    context.authorization,
+    context.clock,
+    context.idGenerator,
+    context.jobs,
+    context.attempts,
+    context.publisher,
+    context.audit,
+    context.unitOfWork
+  );
 
 describe('SubmitDocumentUseCase', () => {
   it('queues a new job and stores the document', async () => {
@@ -339,6 +360,66 @@ describe('SubmitDocumentUseCase', () => {
 });
 
 describe('ReprocessDocumentUseCase', () => {
+  it('requires a non-empty reprocess reason', async () => {
+    const context = createSubmitDocumentUseCase();
+    const actor = buildActor();
+    const initialJob = await context.useCase.execute(
+      {
+        file: buildUploadedFile(),
+        requestedMode: 'STANDARD',
+        forceReprocess: false
+      },
+      actor
+    );
+
+    await expect(
+      createReprocessUseCase(context).execute(
+        {
+          jobId: initialJob.jobId,
+          reason: '   '
+        },
+        actor
+      )
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it('returns NOT_FOUND when the original job does not exist', async () => {
+    const context = createSubmitDocumentUseCase();
+
+    await expect(
+      createReprocessUseCase(context).execute(
+        {
+          jobId: 'missing-job',
+          reason: 'model update'
+        },
+        buildActor()
+      )
+    ).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it('restricts reprocessing to OWNER', async () => {
+    const context = createSubmitDocumentUseCase();
+    const actor = buildActor();
+    const initialJob = await context.useCase.execute(
+      {
+        file: buildUploadedFile(),
+        requestedMode: 'STANDARD',
+        forceReprocess: false
+      },
+      actor
+    );
+
+    await expect(
+      createReprocessUseCase(context).execute(
+        {
+          jobId: initialJob.jobId,
+          reason: 'model update'
+        },
+        buildActor({ role: Role.OPERATOR })
+      )
+    ).rejects.toBeInstanceOf(AuthorizationError);
+  });
+
   it('creates a new queued job that points to the original job', async () => {
     const context = createSubmitDocumentUseCase();
     const actor = buildActor();
@@ -351,18 +432,7 @@ describe('ReprocessDocumentUseCase', () => {
       actor
     );
 
-    const useCase = new ReprocessDocumentUseCase(
-      context.authorization,
-      context.clock,
-      context.idGenerator,
-      context.jobs,
-      context.attempts,
-      context.publisher,
-      context.audit,
-      context.unitOfWork
-    );
-
-    const response = await useCase.execute(
+    const response = await createReprocessUseCase(context).execute(
       {
         jobId: initialJob.jobId,
         reason: 'model update'
@@ -376,5 +446,12 @@ describe('ReprocessDocumentUseCase', () => {
       reprocessOfJobId: initialJob.jobId,
       forceReprocess: true
     });
+    await expect(context.attempts.listByJobId(response.jobId)).resolves.toMatchObject([
+      {
+        status: 'QUEUED',
+        attemptNumber: 1
+      }
+    ]);
+    expect(context.publisher.messages).toHaveLength(2);
   });
 });
