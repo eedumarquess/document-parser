@@ -10,12 +10,12 @@ Construir o MVP do parser documental com dois servicos independentes, arquitetur
 - `Hexagonal architecture` em cada servico
 - `TDD first` para dominio e aplicacao
 - `Clean code` com funcoes nomeadas explicitamente
-- `Single-tenant` no MVP, sem supermodelar RBAC ou tenancy
+- `Single-tenant` no MVP, com RBAC simples `OWNER` e `OPERATOR`
 - `Template Management` fora do contrato inicial
 
 ## Arquitetura alvo do repositorio
 
-O repositorio pode nascer como monorepo com dois deployables independentes:
+O repositorio nasce como monorepo com dois deployables independentes:
 
 ```text
 apps/
@@ -42,20 +42,14 @@ apps/
       contracts/
       e2e/
 packages/
-  job-contracts/
+  shared-kernel/
   testkit/
-  observability-contracts/
-infra/
-  docker-compose.yml
-  rabbitmq/
-  mongo/
-  minio/
 ```
 
 Regras importantes:
 
 - dominio nao pode ser compartilhado entre os dois servicos
-- pacotes compartilhados so podem conter contratos tecnicos, fixtures e utilitarios de teste
+- pacotes compartilhados so podem conter contratos tecnicos, enums, fixtures e utilitarios de teste
 - controllers HTTP e consumers de fila vivem em `adapters/in`
 - `MongoDB`, `MinIO`, `RabbitMQ`, OCR e LLM vivem em `adapters/out`
 
@@ -146,7 +140,7 @@ Exemplos de nomes esperados:
 
 - fluxo `RECEIVED -> VALIDATED -> STORED`
 - fluxo de deduplicacao com `reusedResult=true`
-- criacao do primeiro `JobAttempt` com `PENDING`
+- criacao do primeiro `JobAttempt` com `QUEUED`
 - `GET /v1/parsing/jobs/{jobId}`
 - primeira taxonomia de erros
 
@@ -183,12 +177,11 @@ Exemplos de nomes esperados:
 - documento percorre fila, gera resultado e fica consultavel
 - falhas transitorias geram retry controlado
 
-## Fase 4: Heuristicas, manuscrito e fallback LLM
+## Fase 4: Heuristicas, ilegibilidade e fallback LLM
 
 ### Entregas
 
-- deteccao de manuscrito e checkbox
-- marcador `[ilegivel]`
+- marcador `[ilegivel]` e semantica textual minima
 - heuristicas de fallback
 - mascaramento de dados sensiveis
 - chamada a LLM em nivel de campo
