@@ -14,6 +14,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApplicationError,
   DEFAULT_REQUESTED_MODE,
+  ErrorCode,
   Role,
   type AuditActor
 } from '@document-parser/shared-kernel';
@@ -22,6 +23,7 @@ import { GetJobStatusUseCase } from '../../../application/use-cases/get-job-stat
 import { GetProcessingResultUseCase } from '../../../application/use-cases/get-processing-result.use-case';
 import { ReprocessDocumentUseCase } from '../../../application/use-cases/reprocess-document.use-case';
 import { SubmitDocumentUseCase } from '../../../application/use-cases/submit-document.use-case';
+import type { HttpErrorResponse } from '../../../contracts/http';
 
 type UploadedMultipartFile = {
   originalname: string;
@@ -47,7 +49,7 @@ export class DocumentJobsController {
     @Req() request: Request
   ) {
     if (file === undefined) {
-      throw new HttpException({ errorCode: 'VALIDATION_ERROR', message: 'file is required' }, 400);
+      throw new HttpException(this.buildErrorResponse(ErrorCode.VALIDATION_ERROR, 'file is required'), 400);
     }
 
     try {
@@ -116,21 +118,29 @@ export class DocumentJobsController {
   private toHttpException(error: unknown): HttpException {
     if (error instanceof ApplicationError) {
       return new HttpException(
-        {
-          errorCode: error.errorCode,
-          message: error.message,
-          metadata: error.metadata
-        },
+        this.buildErrorResponse(error.errorCode, error.message, error.metadata),
         error.httpStatus
       );
     }
 
     return new HttpException(
-      {
-        errorCode: 'FATAL_FAILURE',
-        message: error instanceof Error ? error.message : 'Unexpected failure'
-      },
+      this.buildErrorResponse(
+        ErrorCode.FATAL_FAILURE,
+        error instanceof Error ? error.message : 'Unexpected failure'
+      ),
       HttpStatus.INTERNAL_SERVER_ERROR
     );
+  }
+
+  private buildErrorResponse(
+    errorCode: ErrorCode,
+    message: string,
+    metadata?: Record<string, unknown>
+  ): HttpErrorResponse {
+    return {
+      errorCode,
+      message,
+      metadata
+    };
   }
 }

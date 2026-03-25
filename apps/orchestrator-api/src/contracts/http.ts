@@ -1,4 +1,4 @@
-import type { JobStatus } from '@document-parser/shared-kernel';
+import type { ErrorCode, JobStatus } from '@document-parser/shared-kernel';
 
 export type JobResponse = {
   jobId: string;
@@ -23,3 +23,8 @@ export type ResultResponse = {
   payload: string;
 };
 
+export type HttpErrorResponse = {
+  errorCode: ErrorCode;
+  message: string;
+  metadata?: Record<string, unknown>;
+};
