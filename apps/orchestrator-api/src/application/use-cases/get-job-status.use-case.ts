@@ -1,34 +1,124 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { NotFoundError, type AuditActor } from '@document-parser/shared-kernel';
 import type { JobResponse } from '../../contracts/http';
-import type { AuthorizationPort, ProcessingJobRepositoryPort } from '../../contracts/ports';
+import type {
+  AuditPort,
+  AuthorizationPort,
+  ClockPort,
+  IdGeneratorPort,
+  LoggingPort,
+  MetricsPort,
+  ProcessingJobRepositoryPort,
+  TracingPort
+} from '../../contracts/ports';
 import { TOKENS } from '../../contracts/tokens';
+import { RetentionPolicyService } from '../../domain/services/retention-policy.service';
 import type { GetJobStatusQuery } from '../queries/get-job-status.query';
+import { RedactionPolicyService } from '@document-parser/shared-kernel';
 
 @Injectable()
 export class GetJobStatusUseCase {
   public constructor(
     @Inject(TOKENS.AUTHORIZATION) private readonly authorization: AuthorizationPort,
-    @Inject(TOKENS.JOB_REPOSITORY) private readonly jobs: ProcessingJobRepositoryPort
+    @Inject(TOKENS.CLOCK) private readonly clock: ClockPort,
+    @Inject(TOKENS.ID_GENERATOR) private readonly idGenerator: IdGeneratorPort,
+    @Inject(TOKENS.JOB_REPOSITORY) private readonly jobs: ProcessingJobRepositoryPort,
+    @Inject(TOKENS.AUDIT) private readonly audit: AuditPort,
+    @Inject(TOKENS.LOGGING) private readonly logging: LoggingPort,
+    @Inject(TOKENS.METRICS) private readonly metrics: MetricsPort,
+    @Inject(TOKENS.TRACING) private readonly tracing: TracingPort,
+    private readonly retentionPolicy: RetentionPolicyService,
+    private readonly redactionPolicy: RedactionPolicyService
   ) {}
 
-  public async execute(query: GetJobStatusQuery, actor: AuditActor): Promise<JobResponse> {
-    this.authorization.ensureCanRead(actor);
-    const job = await this.jobs.findById(query.jobId);
-    if (job === undefined) {
-      throw new NotFoundError('Processing job not found', { jobId: query.jobId });
-    }
+  public async execute(query: GetJobStatusQuery, actor: AuditActor, traceId: string): Promise<JobResponse> {
+    const startedAt = Date.now();
 
-    return {
-      jobId: job.jobId,
-      documentId: job.documentId,
-      status: job.status,
-      requestedMode: job.requestedMode,
-      pipelineVersion: job.pipelineVersion,
-      outputVersion: job.outputVersion,
-      reusedResult: job.reusedResult,
-      createdAt: job.createdAt.toISOString()
-    };
+    return this.tracing.runInSpan(
+      {
+        traceId,
+        spanName: 'orchestrator.get_job_status',
+        attributes: {
+          jobId: query.jobId,
+          actorId: actor.actorId
+        }
+      },
+      async () => {
+        try {
+          this.authorization.ensureCanRead(actor);
+          const job = await this.jobs.findById(query.jobId);
+          if (job === undefined) {
+            throw new NotFoundError('Processing job not found', { jobId: query.jobId });
+          }
+
+          const now = this.clock.now();
+          const metadata = {
+            jobId: job.jobId,
+            documentId: job.documentId,
+            status: job.status
+          };
+
+          await this.audit.record({
+            eventId: this.idGenerator.next('audit'),
+            eventType: 'JOB_STATUS_QUERIED',
+            aggregateType: 'PROCESSING_JOB',
+            aggregateId: job.jobId,
+            traceId,
+            actor,
+            metadata,
+            redactedPayload: this.redactionPolicy.redact(metadata) as Record<string, unknown>,
+            createdAt: now,
+            retentionUntil: this.retentionPolicy.calculateAuditRetentionUntil(now)
+          });
+          await this.logging.log({
+            level: 'info',
+            message: 'Job status queried',
+            context: 'GetJobStatusUseCase',
+            traceId,
+            data: this.redactionPolicy.redact(metadata) as Record<string, unknown>,
+            recordedAt: now
+          });
+          await this.metrics.increment({
+            name: 'orchestrator.job_status.queried',
+            traceId
+          });
+
+          return {
+            jobId: job.jobId,
+            documentId: job.documentId,
+            status: job.status,
+            requestedMode: job.requestedMode,
+            pipelineVersion: job.pipelineVersion,
+            outputVersion: job.outputVersion,
+            reusedResult: job.reusedResult,
+            createdAt: job.createdAt.toISOString()
+          };
+        } catch (error) {
+          await this.metrics.increment({
+            name: 'orchestrator.job_status.failed',
+            traceId
+          });
+          await this.logging.log({
+            level: 'error',
+            message: 'Job status query failed',
+            context: 'GetJobStatusUseCase',
+            traceId,
+            data: this.redactionPolicy.redact({
+              jobId: query.jobId,
+              actorId: actor.actorId,
+              errorMessage: error instanceof Error ? error.message : 'Unexpected failure'
+            }) as Record<string, unknown>,
+            recordedAt: this.clock.now()
+          });
+          throw error;
+        } finally {
+          await this.metrics.recordHistogram({
+            name: 'orchestrator.job_status.duration_ms',
+            value: Date.now() - startedAt,
+            traceId
+          });
+        }
+      }
+    );
   }
 }
-
