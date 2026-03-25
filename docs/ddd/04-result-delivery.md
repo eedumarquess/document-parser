@@ -2,74 +2,94 @@
 
 ## Objetivo
 
-Expor o estado do processamento e a saída versionada sem acoplar o consumidor à complexidade interna da pipeline.
+Expor status, resultado final e reprocessamento sem obrigar o consumidor a entender a complexidade interna da pipeline.
 
-## Responsabilidades
+## Decisoes fechadas do MVP
 
-- Fornecer consulta de status por job
-- Expor resultado final enriquecido
-- Suportar reprocessamento controlado
-- Entregar erros funcionais claros
-- Aplicar autorização e auditoria de acesso
+- `GET /v1/parsing/jobs/{jobId}` expoe status do job
+- `GET /v1/parsing/jobs/{jobId}/result` expoe payload final e metadados minimos
+- `POST /v1/parsing/jobs/{jobId}/reprocess` cria novo job para o mesmo `documentId`
+- O payload externo do MVP e texto consolidado com marcacoes, nao um conjunto obrigatorio de campos estruturados
+- Links temporarios para artefatos sao opcionais e ficam fora do contrato minimo
+- O sistema nasce `single-tenant`, mas a autorizacao continua sendo porta explicita
 
-## Agregados principais
+## Agregado `ProcessingResult`
 
-### `ProcessingResult`
+Saida versionada produzida pelo worker e entregue pela API.
 
-Saída versionada do processamento de um documento.
-
-#### Atributos principais
+### Atributos principais
 
 - `resultId`
 - `jobId`
 - `documentId`
 - `status`
+- `requestedMode`
 - `outputVersion`
-- `engineUsed`
+- `pipelineVersion`
+- `normalizationVersion`
+- `promptVersion`
+- `modelVersion`
 - `confidenceScore`
-- `normalizedText`
-- `fields`
-- `checkboxes`
-- `handwrittenSegments`
 - `warnings`
+- `consolidatedText`
+- `createdAt`
 
-### `ResultAccess`
+## Objeto de politica `ResultAccessPolicy`
 
-Objeto de política para validar quem pode consultar, baixar ou reprocessar.
+No MVP o ator efetivo e o `OWNER`, mas a verificacao fica atras de porta para preservar a evolucao para RBAC.
 
-## Regras de negócio
+## Contrato externo minimo
 
-- O endpoint de resultado não deve expor artefatos internos sem autorização explícita
-- Reprocessamento deve preservar histórico anterior
-- Erros funcionais precisam ter código estável, mensagem clara e contexto mínimo
-- O resultado final é sempre associado a versões técnicas relevantes
+```json
+{
+  "jobId": "job_123",
+  "documentId": "doc_123",
+  "status": "COMPLETED",
+  "requestedMode": "STANDARD",
+  "pipelineVersion": "git:9f2ab17",
+  "outputVersion": "1.0.0",
+  "confidence": 0.91,
+  "warnings": [],
+  "payload": {
+    "consolidatedText": "Paciente consciente. Nao pratico [marcado]. Observacao manuscrita: [ilegivel]."
+  }
+}
+```
 
-## Value objects
+O contrato minimo nao expoe por padrao:
 
-- `OutputVersion`
-- `ResultStatus`
-- `ErrorCode`
-- `AccessDecision`
+- `hash`
+- `pageSummaries`
+- confianca por campo
+- links para artefatos internos
 
-## Serviços de domínio
+Essas informacoes podem existir internamente no read model, mas nao fazem parte do contrato publico do MVP.
+
+## Regras de negocio
+
+- Um resultado sempre pertence a um job especifico.
+- Reprocessamento nunca sobrescreve o resultado anterior.
+- O contrato externo deve permanecer estavel por `outputVersion`.
+- `PARTIAL` e exposto quando o payload e utilizavel, mas possui lacunas reconhecidas.
+- `FAILED` nao retorna `payload`, apenas metadados e erro funcional.
+
+## Taxonomia inicial de erros expostos
+
+- `VALIDATION_ERROR`
+- `AUTHORIZATION_ERROR`
+- `NOT_FOUND`
+- `TRANSIENT_FAILURE`
+- `FATAL_FAILURE`
+- `TIMEOUT`
+- `DLQ_ERROR`
+- `REPROCESSING_ERROR`
+
+## Servicos de dominio
 
 - `ResultAssemblerService`
-- `ResultExposurePolicy`
+- `ResultAccessPolicy`
+- `ResultErrorContractService`
 - `ReprocessAuthorizationService`
-- `ErrorContractService`
-
-## Repositórios
-
-- `ProcessingResultRepository`
-- `ProcessingJobRepository`
-- `AuditEventRepository`
-
-## Eventos de domínio
-
-- `ResultPublished`
-- `ResultQueried`
-- `ResultDownloadRequested`
-- `JobReprocessingRequested`
 
 ## Portas
 
@@ -77,24 +97,37 @@ Objeto de política para validar quem pode consultar, baixar ou reprocessar.
 
 - `GetJobStatusQuery`
 - `GetProcessingResultQuery`
-- `ReprocessDocumentCommand`
+- `ReprocessJobCommand`
 
-### Saída
+### Saida
 
-- `ReadModelPort`
+- `ProcessingJobReadModelPort`
+- `ProcessingResultReadModelPort`
 - `AuthorizationPort`
 - `AuditPort`
+- `ClockPort`
 
-## Contrato externo mínimo
+## Regras de clean code para este contexto
 
-- `jobId`
-- `documentId`
-- `status`
-- `hash`
-- `pages`
-- `engine`
-- `latency`
-- `warnings`
-- `confidence`
-- `outputVersion`
-- `payload`
+- queries nao devem reconstruir regra de negocio ja encapsulada no dominio
+- o assembler de resposta deve ter funcoes nomeadas, por exemplo `buildPublicProcessingResultResponse`
+- reprocessamento deve viver em caso de uso proprio, nunca como `if` escondido no controller
+- controllers devem apenas mapear HTTP para query ou command
+
+## Plano de implementacao orientado a TDD
+
+1. Criar testes do `ResultAssemblerService` para `COMPLETED`, `PARTIAL` e `FAILED`.
+2. Criar testes do `GetJobStatusQuery`.
+3. Criar testes do `GetProcessingResultQuery`.
+4. Criar testes do `ReprocessJobCommand`, garantindo novo job e preservacao do historico.
+5. Criar contract tests HTTP dos endpoints de status, resultado e reprocessamento.
+6. Criar testes E2E cobrindo submissao, consulta, deduplicacao e reprocessamento.
+
+## Cenarios de teste obrigatorios
+
+- retorna metadados minimos e `consolidatedText` para job concluido
+- retorna `PARTIAL` com warnings quando o resultado for incompleto
+- retorna erro funcional quando o job ainda nao tem resultado
+- retorna erro funcional quando o job nao existir
+- cria novo job ao reprocessar sem apagar o resultado anterior
+- gera auditoria ao consultar resultado

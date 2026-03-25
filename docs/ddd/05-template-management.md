@@ -2,22 +2,30 @@
 
 ## Objetivo
 
-Preparar o sistema para uma futura capacidade de classificação e extração guiada por template sem acoplar o MVP a um cadastro obrigatório.
+Manter uma fronteira explicita para classificacao e extracao guiadas por template sem contaminar o MVP com complexidade prematura.
 
-## Responsabilidades
+## Decisao oficial para o MVP
 
-- Versionar templates documentais
-- Manter regras de matching
-- Definir campos esperados e semântica por layout
-- Permitir ativação gradual por domínio documental
+`Template Management` fica totalmente fora do contrato e do schema do MVP.
 
-## Agregado principal
+Isso significa:
 
-### `TemplateDefinition`
+- nao existe `templateId` no contrato externo inicial
+- nao existe `templateStatus` no contrato externo inicial
+- nao existe colecao obrigatoria de template no schema do MVP
+- `Ingestion`, `Document Processing` e `Result Delivery` nao dependem de template para funcionar
 
-Representa uma definição versionada de template documental.
+## Papel arquitetural agora
 
-#### Atributos principais
+Mesmo fora do MVP, o subdominio continua documentado para evitar acoplamento indevido:
+
+- a pipeline atual deve continuar generica
+- nenhuma regra do worker pode assumir template fixo como pre-condicao
+- qualquer evolucao futura de template deve entrar por contexto proprio
+
+## Agregado futuro `TemplateDefinition`
+
+Quando o contexto for ativado, ele deve conter pelo menos:
 
 - `templateId`
 - `name`
@@ -28,40 +36,14 @@ Representa uma definição versionada de template documental.
 - `fieldDefinitions`
 - `checkboxDefinitions`
 
-## Regras de negócio
+## Regras de negocio futuras
 
-- O MVP não depende de template para processar ficha clínica
-- Templates futuros devem ser versionados e auditáveis
-- Quando a classificação por template estiver ativa, documentos desconhecidos poderão resultar em `templateStatus=UNKNOWN`
-- Falha por template desconhecido só entra quando esse subdomínio estiver ativado funcionalmente
+- templates devem ser versionados
+- classificacao por template deve ser auditavel
+- documento desconhecido pode resultar em `UNKNOWN` apenas quando o contexto estiver ativo
+- a ativacao de template nao deve quebrar o processamento generico existente
 
-## Value objects
-
-- `TemplateVersion`
-- `MatchingRule`
-- `FieldDefinition`
-- `CheckboxDefinition`
-- `TemplateStatus`
-
-## Serviços de domínio
-
-- `TemplateMatchingService`
-- `TemplateVersioningService`
-- `TemplateActivationPolicy`
-
-## Repositórios
-
-- `TemplateDefinitionRepository`
-
-## Eventos de domínio
-
-- `TemplateCreated`
-- `TemplateVersionPublished`
-- `TemplateActivated`
-- `TemplateDeprecated`
-- `TemplateClassificationFailed`
-
-## Portas
+## Portas futuras
 
 ### Entrada
 
@@ -69,11 +51,35 @@ Representa uma definição versionada de template documental.
 - `PublishTemplateVersionCommand`
 - `ClassifyDocumentByTemplateCommand`
 
-### Saída
+### Saida
 
 - `TemplateRepositoryPort`
 - `TemplateArtifactStoragePort`
 
-## Papel no MVP
+## Regras de clean code para o futuro
 
-Subdomínio explícito no desenho, mas com implementação adiada. A existência dessa fronteira evita refatorações pesadas quando o parser passar de extração genérica para extração dirigida por layout.
+- matching de template deve viver em politicas nomeadas
+- regras de classificacao nao devem ser espalhadas por adapters do worker
+- nomes esperados: `classifyDocumentAgainstKnownTemplates`, `publishTemplateVersion`, `markTemplateAsDeprecated`
+
+## Plano de implementacao
+
+### No MVP
+
+1. Nao implementar schema, endpoint ou CRUD.
+2. Nao inserir campos de template nos agregados atuais.
+3. Garantir por revisao arquitetural que a pipeline continua independente de template.
+
+### Pos-MVP
+
+1. Criar `TemplateDefinition` e suas politicas por TDD.
+2. Criar matching service com dataset sintetico e fixtures reais.
+3. Adicionar contratos administrativos para cadastro e publicacao.
+4. Integrar classificacao de template como etapa opcional antes da extracao enriquecida.
+
+## Criterio de pronto para ativacao futura
+
+- templates versionados
+- matching reproduzivel por testes
+- fallback para processamento generico quando a classificacao nao for conclusiva
+- auditoria de criacao, publicacao e classificacao

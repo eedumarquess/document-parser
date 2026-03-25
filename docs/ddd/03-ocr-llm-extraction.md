@@ -2,96 +2,101 @@
 
 ## Objetivo
 
-Extrair informação útil do documento por uma pipeline plugável, distinguindo texto impresso, manuscrito, checkbox, campos e trechos ilegíveis.
+Executar a pipeline de extracao que transforma o documento em texto consolidado com marcacoes semanticas, preservando evidencias tecnicas suficientes para auditoria, tuning e reprocessamento.
 
-## Responsabilidades
+## Decisoes fechadas do MVP
 
-- Renderizar o documento por página
-- Executar OCR primário
-- Aplicar heurísticas de validação
-- Acionar fallback para LLM quando necessário
-- Produzir payload estruturado e texto consolidado
-- Registrar evidências por página para debug e melhoria futura
+- OCR tradicional e a estrategia primaria
+- Fallback para LLM e acionado por heuristicas
+- O fallback ocorre em nivel de campo ou segmento, nao no documento inteiro por padrao
+- Gatilhos iniciais de fallback: OCR vazio, baixa confianca global, manuscrito detectado, checkbox ambiguo e campos criticos ausentes
+- O provedor externo inicial deve caber em `free tier` ou custo baixo, com adapters previstos para `OpenRouter` e `HuggingFace`
+- Toda chamada a LLM externo exige mascaramento antes do envio
+- Artefatos obrigatorios persistidos no MVP: original, render por pagina, OCR bruto, texto mascarado enviado ao LLM, prompt e resposta
+- Recortes de manuscrito nao sao obrigatorios no MVP
+- O payload externo do MVP e texto consolidado com marcacoes; campos estruturados ficam para fase posterior
 
-## Agregado principal
+## Agregado `ExtractionRun`
 
-### `ExtractionRun`
+Representa a execucao concreta da pipeline para um `JobAttempt`.
 
-Representa a execução concreta da pipeline de extração sobre um documento.
-
-#### Atributos principais
+### Atributos principais
 
 - `runId`
 - `jobId`
-- `pagePlan`
-- `engineSequence`
+- `attemptId`
 - `pipelineVersion`
-- `confidenceScore`
+- `engineSequence`
+- `globalConfidence`
 - `warnings`
 - `status`
 
-## Entidades internas relevantes
+## Entidades internas
 
 ### `PageExtraction`
 
 - `pageNumber`
-- `renderArtifact`
-- `ocrText`
+- `renderReference`
+- `rawOcrText`
 - `normalizedText`
-- `checkboxes`
 - `handwrittenSegments`
-- `illegibleSegments`
+- `checkboxFindings`
 - `confidenceScore`
 
-### `FieldExtraction`
+### `FallbackTarget`
 
-- `fieldName`
-- `value`
-- `sourceType`
-- `confidenceScore`
-- `normalizationStatus`
+Representa um campo, trecho ou segmento elegivel para fallback.
 
-## Regras de negócio
+- `targetId`
+- `pageNumber`
+- `targetType`
+- `targetText`
+- `fallbackReason`
+- `maskedPromptReference`
 
-- OCR tradicional é a primeira estratégia padrão
-- Fallback para LLM só ocorre após validação heurística indicar necessidade
-- Manuscrito de baixa confiança não deve ser promovido como dado confiável
-- Conteúdo ilegível deve virar marcador explícito `[ilegível]`
-- Assinaturas e rubricas ficam fora do escopo do MVP
+## Regras de negocio
+
+- A pipeline sempre comeca por renderizacao e OCR tradicional.
+- A decisao de fallback precisa ser explicita e auditavel.
+- Conteudo manuscrito de baixa confianca deve ser marcado, nao promovido como verdade.
+- Conteudo ilegivel deve virar marcador explicito `[ilegivel]`.
+- O resultado final pode ser `PARTIAL` quando existir texto consolidado utilizavel, mas incompleto.
+- Assinaturas e rubricas ficam fora do escopo do MVP.
+
+## `PARTIAL` no contexto de extracao
+
+Classificar como `PARTIAL` quando:
+
+- o texto consolidado foi produzido
+- parte do documento ficou como `[ilegivel]`
+- checkbox permaneceu ambiguo
+- manuscrito ficou sem transcricao confiavel
+- houve campo ou segmento critico sem recuperacao mesmo apos fallback
+
+Classificar como `FAILED` quando:
+
+- nao houver payload utilizavel
+- o OCR falhar sem produzir texto minimamente valido
+- a pipeline inteira exceder o retry permitido sem resultado aproveitavel
 
 ## Value objects
 
 - `EngineSequence`
 - `ConfidenceScore`
-- `BoundingBox`
-- `ExtractedField`
+- `FallbackReason`
 - `CheckboxState`
 - `HandwritingClassification`
+- `MaskedPrompt`
 
-## Serviços de domínio
+## Servicos de dominio
 
 - `PageRenderingService`
 - `OpticalRecognitionService`
-- `HeuristicValidationService`
-- `FallbackDecisionService`
-- `NormalizationService`
-- `ConfidenceScoringService`
-
-## Repositórios
-
-- `PageArtifactRepository`
-- `HandwrittenSegmentRepository`
-- `ProcessingResultRepository`
-
-## Eventos de domínio
-
-- `PageRendered`
-- `OcrCompleted`
-- `HeuristicValidationFailed`
-- `LlmFallbackRequested`
-- `HandwrittenSegmentDetected`
-- `IllegibleSegmentDetected`
-- `ExtractionCompleted`
+- `HeuristicEvaluationService`
+- `FieldLevelFallbackDecisionService`
+- `SensitiveDataMaskingService`
+- `TextConsolidationService`
+- `ResultClassificationService`
 
 ## Portas
 
@@ -99,15 +104,61 @@ Representa a execução concreta da pipeline de extração sobre um documento.
 
 - `ExecuteExtractionCommand`
 
-### Saída
+### Saida
 
 - `OriginalDocumentReaderPort`
 - `RenderedArtifactStoragePort`
+- `RawOcrArtifactStoragePort`
+- `MaskedPromptStoragePort`
+- `PromptAuditStoragePort`
 - `OcrEnginePort`
 - `LlmExtractionPort`
-- `NormalizationRulesPort`
+- `ClockPort`
 
-## Política de dados sensíveis
+## Pipeline recomendada
+
+1. `loadOriginalDocumentForAttempt`
+2. `renderDocumentPages`
+3. `extractPrintedTextFromPages`
+4. `detectHandwrittenSegments`
+5. `detectCheckboxFindings`
+6. `evaluateFieldLevelFallbackTargets`
+7. `buildMaskedPromptForLlm`
+8. `mergeFallbackResponsesIntoPageText`
+9. `buildConsolidatedDocumentText`
+10. `classifyExtractionResult`
+
+## Politica de dados sensiveis
 
 - OCR interno pode operar com texto bruto
-- Qualquer chamada a LLM externo deve receber prompt mascarado ou pseudonimizado
+- Prompt de LLM externo deve receber texto mascarado
+- Prompt e resposta precisam ser persistidos para auditoria tecnica
+- Logs nunca podem carregar o texto integral enviado ao provedor externo
+
+## Regras de clean code para este contexto
+
+- cada etapa da pipeline deve ter entrada e saida explicitas
+- evitar funcoes genericas como `runPipelineStep`; preferir `evaluateCheckboxAmbiguity` ou `mergeHandwrittenMarkersIntoText`
+- heuristicas devem ficar em funcoes puras para facilitar regressao
+- o adapter de LLM nao decide negocio; ele apenas executa o contrato da porta
+
+## Plano de implementacao orientado a TDD
+
+1. Criar testes das heuristicas de fallback em funcoes puras.
+2. Criar testes do mascaramento de dados sensiveis.
+3. Criar testes do `TextConsolidationService` para `[marcado]`, `[desmarcado]`, `[manuscrito]` e `[ilegivel]`.
+4. Criar testes de aplicacao da pipeline basica `render -> OCR -> consolidacao`.
+5. Criar testes de aplicacao do fluxo com fallback de campo.
+6. Criar contract tests para OCR e LLM com fixtures pequenas e deterministicas.
+7. Criar testes de aceite com amostra inicial do golden dataset.
+
+## Cenarios de teste obrigatorios
+
+- gera render por pagina
+- persiste OCR bruto
+- dispara fallback quando OCR vier vazio
+- dispara fallback para checkbox ambiguo
+- aplica mascaramento antes de chamar LLM
+- persiste prompt e resposta do LLM
+- retorna `[ilegivel]` quando nao houver transcricao confiavel
+- classifica como `PARTIAL` quando o payload for utilizavel e incompleto
