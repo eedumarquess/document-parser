@@ -4,6 +4,8 @@ import {
   DEFAULT_MODEL_VERSION,
   DEFAULT_NORMALIZATION_VERSION,
   DEFAULT_PROMPT_VERSION,
+  ExtractionWarning,
+  FallbackReason,
   JobStatus,
   TransientFailureError,
   FatalFailureError,
@@ -29,10 +31,10 @@ export class SimulatedDocumentExtractionAdapter implements ExtractionPipelinePor
     const fallbackUsed = rawText.includes('[[LLM]]');
     const cleanedText = rawText
       .replaceAll('[[LLM]]', '')
-      .replaceAll('[[ILLEGIBLE]]', '[ilegível]')
+      .replaceAll('[[ILLEGIBLE]]', '[ilegivel]')
       .trim();
-    const payload = cleanedText === '' ? '[ilegível]' : cleanedText;
-    const warnings = payload.includes('[ilegível]') ? ['ILLEGIBLE_CONTENT'] : [];
+    const payload = cleanedText === '' ? '[ilegivel]' : cleanedText;
+    const warnings = payload.includes('[ilegivel]') ? [ExtractionWarning.ILLEGIBLE_CONTENT] : [];
     const status = this.outcomePolicy.decide({ payload, warnings });
     const maskedText = payload.replaceAll(/\d/g, '*');
 
@@ -42,11 +44,6 @@ export class SimulatedDocumentExtractionAdapter implements ExtractionPipelinePor
       confidence: status === JobStatus.COMPLETED ? 0.98 : 0.62,
       warnings,
       payload,
-      fallbackUsed,
-      promptVersion: fallbackUsed ? DEFAULT_PROMPT_VERSION : undefined,
-      modelVersion: fallbackUsed ? DEFAULT_MODEL_VERSION : undefined,
-      normalizationVersion: DEFAULT_NORMALIZATION_VERSION,
-      totalLatencyMs: fallbackUsed ? 2200 : 900,
       artifacts: [
         {
           artifactId: `artifact-render-${input.job.jobId}`,
@@ -73,8 +70,13 @@ export class SimulatedDocumentExtractionAdapter implements ExtractionPipelinePor
           mimeType: 'text/plain',
           metadata: { maskedText }
         }
-      ]
+      ],
+      fallbackUsed,
+      fallbackReason: fallbackUsed ? FallbackReason.LOW_GLOBAL_CONFIDENCE : undefined,
+      promptVersion: fallbackUsed ? DEFAULT_PROMPT_VERSION : undefined,
+      modelVersion: fallbackUsed ? DEFAULT_MODEL_VERSION : undefined,
+      normalizationVersion: DEFAULT_NORMALIZATION_VERSION,
+      totalLatencyMs: fallbackUsed ? 2200 : 900
     };
   }
 }
-

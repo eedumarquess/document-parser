@@ -1,12 +1,11 @@
-import { JobStatus } from '@document-parser/shared-kernel';
+import { JobStatus, type JobWarning } from '@document-parser/shared-kernel';
 
 export class ProcessingOutcomePolicy {
-  public decide(input: { payload: string; warnings: string[] }): JobStatus.COMPLETED | JobStatus.PARTIAL {
-    if (input.payload.includes('[ilegível]') || input.warnings.length > 0) {
+  public decide(input: { payload: string; warnings: JobWarning[] }): JobStatus.COMPLETED | JobStatus.PARTIAL {
+    if (input.payload.includes('[ilegivel]') || input.warnings.length > 0) {
       return JobStatus.PARTIAL;
     }
 
     return JobStatus.COMPLETED;
   }
 }
-
