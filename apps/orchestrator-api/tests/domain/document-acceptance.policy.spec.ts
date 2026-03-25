@@ -58,6 +58,19 @@ describe('CompatibilityKey', () => {
       })
     ).toBe('sha256:abc:STANDARD:git-sha:1.0.0');
   });
+
+  it('ignores unrelated template-like metadata at runtime', () => {
+    expect(
+      CompatibilityKey.build({
+        hash: 'sha256:abc',
+        requestedMode: 'STANDARD',
+        pipelineVersion: 'git-sha',
+        outputVersion: '1.0.0',
+        templateId: 'template-legacy',
+        templateVersion: 'v3'
+      } as any)
+    ).toBe('sha256:abc:STANDARD:git-sha:1.0.0');
+  });
 });
 
 describe('CompatibleResultReusePolicy', () => {

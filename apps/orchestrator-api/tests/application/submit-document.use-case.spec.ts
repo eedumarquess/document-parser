@@ -30,6 +30,7 @@ import { DocumentAcceptancePolicy } from '../../src/domain/policies/document-acc
 import { PageCountPolicy } from '../../src/domain/policies/page-count.policy';
 import { CompatibilityKey } from '../../src/domain/value-objects/compatibility-key';
 import { RetentionPolicyService } from '../../src/domain/services/retention-policy.service';
+import type { ProcessingResultRecord } from '../../src/contracts/models';
 
 class TrackingBinaryStorageAdapter extends InMemoryBinaryStorageAdapter {
   public lastStoredReference?: { bucket: string; objectKey: string };
@@ -232,6 +233,59 @@ describe('SubmitDocumentUseCase', () => {
     expect(secondResponse.status).toBe(JobStatus.COMPLETED);
     expect(context.publisher.messages).toHaveLength(1);
     await expect(context.attempts.listByJobId(secondResponse.jobId)).resolves.toEqual([]);
+  });
+
+  it('keeps compatible reuse based only on compatibilityKey even if a persisted result carries unrelated metadata', async () => {
+    const context = createSubmitDocumentUseCase();
+    const actor = buildActor();
+    const file = buildUploadedFile();
+    const firstResponse = await context.useCase.execute(
+      {
+        file,
+        requestedMode: 'STANDARD',
+        forceReprocess: false
+      },
+      actor
+    );
+    const compatibilityKey = CompatibilityKey.build({
+      hash: await context.hashing.calculateHash(file.buffer),
+      requestedMode: 'STANDARD',
+      pipelineVersion: DEFAULT_PIPELINE_VERSION,
+      outputVersion: DEFAULT_OUTPUT_VERSION
+    });
+    const resultWithExtraMetadata: ProcessingResultRecord & { templateId: string } = {
+      resultId: 'result-source',
+      jobId: firstResponse.jobId,
+      documentId: firstResponse.documentId,
+      compatibilityKey,
+      status: JobStatus.COMPLETED,
+      requestedMode: 'STANDARD',
+      pipelineVersion: DEFAULT_PIPELINE_VERSION,
+      outputVersion: DEFAULT_OUTPUT_VERSION,
+      confidence: 0.99,
+      warnings: [],
+      payload: 'resultado reutilizado',
+      engineUsed: 'OCR',
+      totalLatencyMs: 1000,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      templateId: 'legacy-template'
+    };
+
+    await context.results.save(resultWithExtraMetadata);
+
+    const secondResponse = await context.useCase.execute(
+      {
+        file,
+        requestedMode: 'STANDARD',
+        forceReprocess: false
+      },
+      actor
+    );
+
+    expect(secondResponse.reusedResult).toBe(true);
+    expect(secondResponse.status).toBe(JobStatus.COMPLETED);
+    expect(context.publisher.messages).toHaveLength(1);
   });
 
   it('bypasses compatible reuse when forceReprocess is true', async () => {
