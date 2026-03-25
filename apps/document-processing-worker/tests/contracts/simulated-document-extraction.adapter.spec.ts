@@ -1,4 +1,10 @@
-import { AttemptStatus, FatalFailureError, JobStatus, TransientFailureError } from '@document-parser/shared-kernel';
+import {
+  AttemptStatus,
+  FatalFailureError,
+  FallbackReason,
+  JobStatus,
+  TransientFailureError
+} from '@document-parser/shared-kernel';
 import { buildActor } from '@document-parser/testkit';
 import { SimulatedDocumentExtractionAdapter } from '../../src/adapters/out/extraction/simulated-document-extraction.adapter';
 import { ProcessingOutcomePolicy } from '../../src/domain/policies/processing-outcome.policy';
@@ -66,7 +72,16 @@ describe('SimulatedDocumentExtractionAdapter contract', () => {
     });
 
     expect(outcome.status).toBe(JobStatus.PARTIAL);
-    expect(outcome.payload).toContain('[ilegível]');
+    expect(outcome.payload).toContain('[ilegivel]');
+  });
+
+  it('stamps a canonical fallback reason when fallback is used', async () => {
+    const outcome = await adapter.extract({
+      ...baseInput,
+      original: Buffer.from('cpf 123456 [[LLM]]')
+    });
+
+    expect(outcome.fallbackReason).toBe(FallbackReason.LOW_GLOBAL_CONFIDENCE);
   });
 
   it('raises transient failures using the marker contract', async () => {
