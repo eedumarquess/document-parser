@@ -4,6 +4,38 @@ Todas as mudancas relevantes deste repositorio devem ser registradas aqui.
 
 O formato segue uma adaptacao simples de `Keep a Changelog` e usa as tags de contexto dos commits como apoio para rastreabilidade.
 
+## [2026-03-25] - Guardrails de template e alinhamento documental do MVP
+
+### Added
+
+- Novos guardrails de teste na `orchestrator-api` para garantir que contratos HTTP, mensagens de fila e adapters continuem sem `templateId`, `templateVersion`, `templateStatus` e `matchingRules` enquanto `Template Management` permanecer inativo.
+- Novo teste de guardrail arquitetural para verificar que contratos, schemas e codigo runtime do MVP continuam livres de colecoes e comandos de template, preservando `compatibilityKey` como unica chave de reaproveitamento.
+
+### Changed
+
+- `CompatibilityKey` e os testes de submissao e reutilizacao foram reforcados para deixar explicito que o reaproveitamento compativel depende apenas de `hash`, `requestedMode`, `pipelineVersion` e `outputVersion`.
+- Os testes de heuristica do worker passaram a afirmar que `checkboxFindings` e `criticalFieldFindings` continuam sendo pistas internas de fallback, e nao metadados administrativos de template.
+- `docs/database-schemas.md`, `docs/ddd/04-result-delivery.md`, `docs/ddd/05-template-management.md` e `docs/ddd/06-audit-observability.md` foram realinhados ao estado atual do codigo e aos limites reais do MVP.
+
+### Fixed
+
+- A documentacao deixou de insinuar `ProcessingResult` com `FAILED`, colecoes de template no schema do MVP e uma stack de observabilidade completa ja implementada no repositorio.
+- A suite de testes agora protege explicitamente o contrato minimo de status, resultado e fila contra vazamento acidental de campos de template.
+
+### Technical Notes
+
+- `processing_results` continua indexado por `compatibilityKey` para deduplicacao e nao por qualquer identificador de template.
+- `Template Management` segue documentado como contexto futuro, sem impacto no runtime atual de `orchestrator-api` e `document-processing-worker`.
+
+### Commit Contexts
+
+- `bug(worker-heuristics)`
+- `bug(orchestrator-compatibility)`
+- `feat(orchestrator-template-guardrails)`
+- `feat(orchestrator-contract-guardrails)`
+- `docs(result-delivery)`
+- `docs(template-observability)`
+
 ## [2026-03-25] - Result Delivery MVP endurecido na orchestrator-api
 
 ### Added
