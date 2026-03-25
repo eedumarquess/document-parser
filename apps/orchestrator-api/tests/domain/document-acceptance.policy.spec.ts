@@ -60,15 +60,24 @@ describe('CompatibilityKey', () => {
   });
 
   it('ignores unrelated template-like metadata at runtime', () => {
+    const input: {
+      hash: string;
+      requestedMode: string;
+      pipelineVersion: string;
+      outputVersion: string;
+      templateId?: string;
+      templateVersion?: string;
+    } = {
+      hash: 'sha256:abc',
+      requestedMode: 'STANDARD',
+      pipelineVersion: 'git-sha',
+      outputVersion: '1.0.0',
+      templateId: 'template-legacy',
+      templateVersion: 'v3'
+    };
+
     expect(
-      CompatibilityKey.build({
-        hash: 'sha256:abc',
-        requestedMode: 'STANDARD',
-        pipelineVersion: 'git-sha',
-        outputVersion: '1.0.0',
-        templateId: 'template-legacy',
-        templateVersion: 'v3'
-      } as any)
+      CompatibilityKey.build(input)
     ).toBe('sha256:abc:STANDARD:git-sha:1.0.0');
   });
 });

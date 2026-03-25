@@ -19,7 +19,7 @@ export class RetentionPolicyService {
     return addDays(now, 90);
   }
 
-  public calculatePageArtifactRetentionUntil(input: { artifactType: string; now: Date }): Date {
+  public calculatePageArtifactRetentionUntil(input: { artifactType: ArtifactType; now: Date }): Date {
     if (input.artifactType === ArtifactType.OCR_JSON) {
       return addDays(input.now, 90);
     }
