@@ -7,6 +7,7 @@ import {
   Param,
   Post,
   Req,
+  Res,
   UploadedFile,
   UseInterceptors
 } from '@nestjs/common';
@@ -18,7 +19,8 @@ import {
   Role,
   type AuditActor
 } from '@document-parser/shared-kernel';
-import type { Request } from 'express';
+import { randomUUID } from 'crypto';
+import type { Request, Response } from 'express';
 import { GetJobStatusUseCase } from '../../../application/use-cases/get-job-status.use-case';
 import { GetProcessingResultUseCase } from '../../../application/use-cases/get-processing-result.use-case';
 import { ReprocessDocumentUseCase } from '../../../application/use-cases/reprocess-document.use-case';
@@ -46,8 +48,11 @@ export class DocumentJobsController {
   public async submit(
     @UploadedFile() file: UploadedMultipartFile | undefined,
     @Body() body: { requestedMode?: string; forceReprocess?: string },
-    @Req() request: Request
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response
   ) {
+    const { actor, traceId } = this.resolveRequestContext(request, response);
+
     if (file === undefined) {
       throw new HttpException(this.buildErrorResponse(ErrorCode.VALIDATION_ERROR, 'file is required'), 400);
     }
@@ -64,7 +69,8 @@ export class DocumentJobsController {
           requestedMode: body.requestedMode ?? DEFAULT_REQUESTED_MODE,
           forceReprocess: body.forceReprocess === 'true'
         },
-        this.resolveActor(request)
+        actor,
+        traceId
       );
     } catch (error) {
       throw this.toHttpException(error);
@@ -72,18 +78,30 @@ export class DocumentJobsController {
   }
 
   @Get(':jobId')
-  public async getStatus(@Param('jobId') jobId: string, @Req() request: Request) {
+  public async getStatus(
+    @Param('jobId') jobId: string,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response
+  ) {
+    const { actor, traceId } = this.resolveRequestContext(request, response);
+
     try {
-      return await this.getJobStatusUseCase.execute({ jobId }, this.resolveActor(request));
+      return await this.getJobStatusUseCase.execute({ jobId }, actor, traceId);
     } catch (error) {
       throw this.toHttpException(error);
     }
   }
 
   @Get(':jobId/result')
-  public async getResult(@Param('jobId') jobId: string, @Req() request: Request) {
+  public async getResult(
+    @Param('jobId') jobId: string,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response
+  ) {
+    const { actor, traceId } = this.resolveRequestContext(request, response);
+
     try {
-      return await this.getProcessingResultUseCase.execute({ jobId }, this.resolveActor(request));
+      return await this.getProcessingResultUseCase.execute({ jobId }, actor, traceId);
     } catch (error) {
       throw this.toHttpException(error);
     }
@@ -93,19 +111,35 @@ export class DocumentJobsController {
   public async reprocess(
     @Param('jobId') jobId: string,
     @Body() body: { reason?: string },
-    @Req() request: Request
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response
   ) {
+    const { actor, traceId } = this.resolveRequestContext(request, response);
+
     try {
       return await this.reprocessDocumentUseCase.execute(
         {
           jobId,
           reason: body.reason ?? ''
         },
-        this.resolveActor(request)
+        actor,
+        traceId
       );
     } catch (error) {
       throw this.toHttpException(error);
     }
+  }
+
+  private resolveRequestContext(
+    request: Request,
+    response: Response
+  ): { actor: AuditActor; traceId: string } {
+    const traceId = request.header('x-trace-id') ?? randomUUID();
+    response.setHeader('x-trace-id', traceId);
+    return {
+      actor: this.resolveActor(request),
+      traceId
+    };
   }
 
   private resolveActor(request: Request): AuditActor {
