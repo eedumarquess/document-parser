@@ -6,7 +6,8 @@ import type {
   JobAttemptRepositoryPort,
   PageArtifactRepositoryPort,
   ProcessingJobRepositoryPort,
-  ProcessingResultRepositoryPort
+  ProcessingResultRepositoryPort,
+  UnitOfWorkPort
 } from '../../../contracts/ports';
 import type {
   AuditEventRecord,
@@ -113,3 +114,9 @@ export class InMemoryAuditRepository implements AuditPort {
   }
 }
 
+@Injectable()
+export class InMemoryUnitOfWork implements UnitOfWorkPort {
+  public async runInTransaction<T>(work: () => Promise<T>): Promise<T> {
+    return work();
+  }
+}

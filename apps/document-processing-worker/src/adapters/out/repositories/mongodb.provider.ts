@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { ClientSession, Db, MongoClientOptions } from 'mongodb';
 import { MongoClient } from 'mongodb';
+import type { UnitOfWorkPort } from '../../../contracts/ports';
 
 export class MongoSessionContext {
   private readonly storage = new AsyncLocalStorage<ClientSession>();
@@ -46,6 +47,30 @@ export class MongoDatabaseProvider {
       await this.client.close();
       this.client = undefined;
       this.database = undefined;
+    }
+  }
+}
+
+export class MongoUnitOfWorkAdapter implements UnitOfWorkPort {
+  public constructor(
+    private readonly provider: MongoDatabaseProvider,
+    private readonly sessionContext: MongoSessionContext
+  ) {}
+
+  public async runInTransaction<T>(work: () => Promise<T>): Promise<T> {
+    const client = await this.provider.getClient();
+    const session = client.startSession();
+    let result!: T;
+
+    try {
+      await this.sessionContext.runWithSession(session, async () => {
+        await session.withTransaction(async () => {
+          result = await work();
+        });
+      });
+      return result;
+    } finally {
+      await session.endSession();
     }
   }
 }

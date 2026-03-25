@@ -10,7 +10,8 @@ import {
   InMemoryJobAttemptRepository,
   InMemoryPageArtifactRepository,
   InMemoryProcessingJobRepository,
-  InMemoryProcessingResultRepository
+  InMemoryProcessingResultRepository,
+  InMemoryUnitOfWork
 } from './adapters/out/repositories/in-memory.repositories';
 import { ProcessJobMessageUseCase } from './application/use-cases/process-job-message.use-case';
 import type {
@@ -25,7 +26,8 @@ import type {
   JobPublisherPort,
   PageArtifactRepositoryPort,
   ProcessingJobRepositoryPort,
-  ProcessingResultRepositoryPort
+  ProcessingResultRepositoryPort,
+  UnitOfWorkPort
 } from './contracts/ports';
 import { TOKENS } from './contracts/tokens';
 import { ProcessingOutcomePolicy } from './domain/policies/processing-outcome.policy';
@@ -43,6 +45,7 @@ export type WorkerProviderOverrides = Partial<{
   deadLetters: DeadLetterRepositoryPort;
   audit: AuditPort;
   publisher: JobPublisherPort;
+  unitOfWork: UnitOfWorkPort;
   extraction: ExtractionPipelinePort;
 }>;
 
@@ -80,11 +83,15 @@ export class DocumentProcessingWorkerModule {
         useValue:
           overrides.publisher ??
           ({
-            async publish(): Promise<void> {
+            async publishRequested(): Promise<void> {
+              return;
+            },
+            async publishRetry(): Promise<void> {
               return;
             }
           } satisfies JobPublisherPort)
       },
+      { provide: TOKENS.UNIT_OF_WORK, useValue: overrides.unitOfWork ?? new InMemoryUnitOfWork() },
       ProcessingOutcomePolicy,
       RetryPolicyService,
       {
