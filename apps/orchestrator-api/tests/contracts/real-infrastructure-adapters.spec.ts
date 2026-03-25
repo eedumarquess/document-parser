@@ -283,6 +283,56 @@ describeRealInfra('Real infrastructure adapter contracts', () => {
     await expect(documents.findById('doc-rollback')).resolves.toBeUndefined();
   });
 
+  it('keeps a single persisted processing result per jobId', async () => {
+    const now = new Date('2026-03-25T12:40:00.000Z');
+
+    await results.save({
+      resultId: 'result-job-unique-1',
+      jobId: 'job-unique',
+      documentId: 'doc-unique',
+      compatibilityKey: 'compatibility-unique',
+      status: JobStatus.COMPLETED,
+      requestedMode: 'STANDARD',
+      pipelineVersion: 'git-sha',
+      outputVersion: '1.0.0',
+      confidence: 0.7,
+      warnings: [],
+      payload: 'payload antigo',
+      engineUsed: 'OCR',
+      totalLatencyMs: 100,
+      createdAt: now,
+      updatedAt: now,
+      retentionUntil: new Date('2026-06-23T12:40:00.000Z')
+    });
+    await results.save({
+      resultId: 'result-job-unique-2',
+      jobId: 'job-unique',
+      documentId: 'doc-unique',
+      compatibilityKey: 'compatibility-unique',
+      status: JobStatus.PARTIAL,
+      requestedMode: 'STANDARD',
+      pipelineVersion: 'git-sha',
+      outputVersion: '1.0.0',
+      confidence: 0.9,
+      warnings: ['ILLEGIBLE_CONTENT'],
+      payload: 'payload novo',
+      engineUsed: 'OCR+LLM',
+      totalLatencyMs: 150,
+      createdAt: new Date('2026-03-25T12:41:00.000Z'),
+      updatedAt: new Date('2026-03-25T12:41:00.000Z'),
+      retentionUntil: new Date('2026-06-23T12:41:00.000Z')
+    });
+
+    await expect(results.findByJobId('job-unique')).resolves.toMatchObject({
+      resultId: 'result-job-unique-2',
+      payload: 'payload novo',
+      status: JobStatus.PARTIAL
+    });
+
+    const database = await mongoProvider.getDatabase();
+    await expect(database.collection('processing_results').countDocuments({ jobId: 'job-unique' })).resolves.toBe(1);
+  });
+
   it('keeps only the current orchestrator Mongo collections and no template collections', async () => {
     const database = await mongoProvider.getDatabase();
     const collectionNames = (await database.listCollections({}, { nameOnly: true }).toArray())
@@ -334,6 +384,10 @@ describeRealInfra('Real infrastructure adapter contracts', () => {
     );
     expect(resultIndexes).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({
+          key: { jobId: 1 },
+          unique: true
+        }),
         expect.objectContaining({
           key: { retentionUntil: 1 },
           expireAfterSeconds: 0
