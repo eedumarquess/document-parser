@@ -83,6 +83,7 @@ export type FallbackTarget = {
   originalMarker?: string;
   maskedText?: string;
   promptText?: string;
+  placeholderMap?: Record<string, string>;
   responseText?: string;
   maskedPromptReference?: ArtifactReference;
   llmResponseReference?: ArtifactReference;

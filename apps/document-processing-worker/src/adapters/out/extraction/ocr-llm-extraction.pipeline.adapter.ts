@@ -4,7 +4,6 @@ import {
   DEFAULT_NORMALIZATION_VERSION,
   DEFAULT_PROMPT_VERSION,
   FatalFailureError,
-  JobStatus,
   TransientFailureError,
   type ArtifactReference,
   type ProcessingOutcome
@@ -138,11 +137,13 @@ export class OcrLlmExtractionPipelineAdapter implements ExtractionPipelinePort {
     }
 
     const requests: LlmFallbackRequest[] = targets.map((target) => {
-      const maskedText = this.maskingService.maskForExternalLlm(target.sourceText);
+      const maskedTarget = this.maskingService.maskForExternalLlm(target.sourceText);
+      const maskedText = maskedTarget.maskedText;
       const promptText = this.buildMaskedPromptForTarget(target, maskedText);
       const maskedPromptReference = this.buildMaskedTextArtifact(jobId, target, maskedText);
       target.maskedText = maskedText;
       target.promptText = promptText;
+      target.placeholderMap = maskedTarget.placeholderMap;
       target.maskedPromptReference = maskedPromptReference;
       target.llmResponseReference = this.buildResponseArtifact(jobId, target, '[pending]');
 
@@ -171,7 +172,10 @@ export class OcrLlmExtractionPipelineAdapter implements ExtractionPipelinePort {
       }
 
       target.responseText = response.responseText;
-      target.resolvedText = response.resolvedText;
+      target.resolvedText =
+        response.resolvedText === undefined
+          ? undefined
+          : this.maskingService.restoreMaskedText(response.resolvedText, target.placeholderMap ?? {});
       target.confidenceScore = response.confidenceScore;
       target.warning = response.warning;
       target.llmResponseReference = this.buildResponseArtifact(jobId, target, response.responseText, response.resolvedText);
@@ -247,6 +251,7 @@ export class OcrLlmExtractionPipelineAdapter implements ExtractionPipelinePort {
       `fallback_reason=${target.fallbackReason}`,
       `page_number=${target.pageNumber ?? 0}`,
       `locator=${JSON.stringify(target.targetLocator)}`,
+      'Preserve placeholders like [cpf_1], [phone_1] and [email_1] exactly as given.',
       'masked_source_text:',
       maskedText,
       'Return only the recovered text or [ilegivel].'
