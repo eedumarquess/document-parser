@@ -34,6 +34,7 @@ describe('SimulatedDocumentExtractionAdapter contract', () => {
       acceptedAt: new Date(),
       requestedBy: buildActor(),
       warnings: [],
+      ingestionTransitions: [{ status: JobStatus.QUEUED as const, at: new Date() }],
       createdAt: new Date(),
       updatedAt: new Date()
     },

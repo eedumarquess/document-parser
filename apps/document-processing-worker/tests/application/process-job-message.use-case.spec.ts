@@ -87,6 +87,7 @@ const createWorkerContext = async (buffer: Buffer, attemptNumber = 1) => {
     queuedAt: clock.now(),
     requestedBy: buildActor({ role: Role.OWNER }),
     warnings: [],
+    ingestionTransitions: [{ status: JobStatus.QUEUED, at: clock.now() }],
     createdAt: clock.now(),
     updatedAt: clock.now()
   });
