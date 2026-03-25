@@ -11,7 +11,7 @@ Expor status, resultado final e reprocessamento sem obrigar o consumidor a enten
 - `POST /v1/parsing/jobs/{jobId}/reprocess` cria novo job para o mesmo `documentId`
 - O payload externo do MVP e texto consolidado com marcacoes, nao um conjunto obrigatorio de campos estruturados
 - Links temporarios para artefatos sao opcionais e ficam fora do contrato minimo
-- O sistema nasce `single-tenant`, mas a autorizacao continua sendo porta explicita
+- O sistema nasce `single-tenant`, com RBAC simples `OWNER` e `OPERATOR`
 
 ## Agregado `ProcessingResult`
 
@@ -31,12 +31,17 @@ Saida versionada produzida pelo worker e entregue pela API.
 - `modelVersion`
 - `confidenceScore`
 - `warnings`
-- `consolidatedText`
+- `payload`
 - `createdAt`
 
 ## Objeto de politica `ResultAccessPolicy`
 
-No MVP o ator efetivo e o `OWNER`, mas a verificacao fica atras de porta para preservar a evolucao para RBAC.
+No MVP:
+
+- `OWNER` pode submeter, consultar e reprocessar
+- `OPERATOR` pode consultar status e resultado
+
+A verificacao continua atras de porta para preservar a evolucao futura.
 
 ## Contrato externo minimo
 
@@ -50,9 +55,7 @@ No MVP o ator efetivo e o `OWNER`, mas a verificacao fica atras de porta para pr
   "outputVersion": "1.0.0",
   "confidence": 0.91,
   "warnings": [],
-  "payload": {
-    "consolidatedText": "Paciente consciente. Nao pratico [marcado]. Observacao manuscrita: [ilegivel]."
-  }
+  "payload": "Paciente consciente. Observacao manuscrita: [ilegivel]."
 }
 ```
 
@@ -125,7 +128,7 @@ Essas informacoes podem existir internamente no read model, mas nao fazem parte 
 
 ## Cenarios de teste obrigatorios
 
-- retorna metadados minimos e `consolidatedText` para job concluido
+- retorna metadados minimos e `payload` textual para job concluido
 - retorna `PARTIAL` com warnings quando o resultado for incompleto
 - retorna erro funcional quando o job ainda nao tem resultado
 - retorna erro funcional quando o job nao existir
