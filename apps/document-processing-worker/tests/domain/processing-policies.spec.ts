@@ -1,4 +1,4 @@
-import { JobStatus } from '@document-parser/shared-kernel';
+import { ExtractionWarning, JobStatus } from '@document-parser/shared-kernel';
 import { ProcessingOutcomePolicy } from '../../src/domain/policies/processing-outcome.policy';
 import { RetryPolicyService } from '../../src/domain/policies/retry-policy.service';
 
@@ -10,11 +10,11 @@ describe('ProcessingOutcomePolicy', () => {
   });
 
   it('marks payloads with illegible marker as PARTIAL', () => {
-    expect(policy.decide({ payload: '[ilegível]', warnings: [] })).toBe(JobStatus.PARTIAL);
+    expect(policy.decide({ payload: '[ilegivel]', warnings: [] })).toBe(JobStatus.PARTIAL);
   });
 
   it('marks payloads with warnings as PARTIAL', () => {
-    expect(policy.decide({ payload: 'texto', warnings: ['warning'] })).toBe(JobStatus.PARTIAL);
+    expect(policy.decide({ payload: 'texto', warnings: [ExtractionWarning.ILLEGIBLE_CONTENT] })).toBe(JobStatus.PARTIAL);
   });
 });
 
@@ -32,4 +32,3 @@ describe('RetryPolicyService', () => {
     expect(policy.calculateDelayMs(2)).toBe(4000);
   });
 });
-

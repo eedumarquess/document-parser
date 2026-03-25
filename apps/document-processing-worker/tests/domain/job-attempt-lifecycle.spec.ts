@@ -16,6 +16,8 @@ import {
   DEFAULT_PIPELINE_VERSION,
   DEFAULT_PROCESSING_QUEUE_NAME,
   ErrorCode,
+  ExtractionWarning,
+  FallbackReason,
   JobStatus
 } from '@document-parser/shared-kernel';
 import { buildActor } from '@document-parser/testkit';
@@ -68,10 +70,11 @@ describe('Job attempt lifecycle', () => {
         status: JobStatus.PARTIAL,
         engineUsed: 'OCR+LLM',
         confidence: 0.62,
-        warnings: ['ILLEGIBLE_CONTENT'],
+        warnings: [ExtractionWarning.ILLEGIBLE_CONTENT],
         payload: '[ilegivel]',
         artifacts: [],
         fallbackUsed: true,
+        fallbackReason: FallbackReason.CHECKBOX_AMBIGUOUS,
         promptVersion: 'git:prompt',
         modelVersion: 'git:model',
         normalizationVersion: 'git:norm',
@@ -85,6 +88,7 @@ describe('Job attempt lifecycle', () => {
     expect(completed.attempt.promptVersion).toBe('git:prompt');
     expect(completed.attempt.modelVersion).toBe('git:model');
     expect(completed.attempt.normalizationVersion).toBe('git:norm');
+    expect(completed.attempt.fallbackReason).toBe(FallbackReason.CHECKBOX_AMBIGUOUS);
   });
 
   it('moves an exhausted failed attempt to DLQ', () => {
