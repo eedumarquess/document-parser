@@ -28,5 +28,8 @@ export class InMemoryBinaryStorageAdapter implements BinaryStoragePort {
     }
     return Buffer.from(buffer);
   }
-}
 
+  public async delete(storageReference: StorageReference): Promise<void> {
+    this.objects.delete(storageReference.objectKey);
+  }
+}

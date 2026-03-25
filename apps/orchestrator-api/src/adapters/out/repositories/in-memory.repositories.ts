@@ -1,10 +1,13 @@
 import { Injectable } from '@nestjs/common';
+import { JobStatus } from '@document-parser/shared-kernel';
 import type {
   AuditPort,
+  CompatibleResultLookupPort,
   DocumentRepositoryPort,
   JobAttemptRepositoryPort,
   ProcessingJobRepositoryPort,
-  ProcessingResultRepositoryPort
+  ProcessingResultRepositoryPort,
+  UnitOfWorkPort
 } from '../../../contracts/ports';
 import type {
   AuditEventRecord,
@@ -13,6 +16,7 @@ import type {
   ProcessingJobRecord,
   ProcessingResultRecord
 } from '../../../contracts/models';
+import { CompatibilityKey } from '../../../domain/value-objects/compatibility-key';
 
 @Injectable()
 export class InMemoryDocumentRepository implements DocumentRepositoryPort {
@@ -68,22 +72,31 @@ export class InMemoryJobAttemptRepository implements JobAttemptRepositoryPort {
 }
 
 @Injectable()
-export class InMemoryProcessingResultRepository implements ProcessingResultRepositoryPort {
+export class InMemoryProcessingResultRepository
+  implements ProcessingResultRepositoryPort, CompatibleResultLookupPort
+{
   private readonly results = new Map<string, ProcessingResultRecord>();
 
-  public async findCompatibleResult(input: {
-    documentId: string;
+  public async findByCompatibilityKey(input: {
+    hash: string;
     requestedMode: string;
     pipelineVersion: string;
     outputVersion: string;
   }): Promise<ProcessingResultRecord | undefined> {
-    return [...this.results.values()].find(
-      (result) =>
-        result.documentId === input.documentId &&
-        result.requestedMode === input.requestedMode &&
-        result.pipelineVersion === input.pipelineVersion &&
-        result.outputVersion === input.outputVersion
-    );
+    const compatibilityKey = CompatibilityKey.build({
+      hash: input.hash,
+      requestedMode: input.requestedMode,
+      pipelineVersion: input.pipelineVersion,
+      outputVersion: input.outputVersion
+    });
+
+    return [...this.results.values()]
+      .filter(
+        (result) =>
+          result.compatibilityKey === compatibilityKey &&
+          (result.status === JobStatus.COMPLETED || result.status === JobStatus.PARTIAL)
+      )
+      .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())[0];
   }
 
   public async findByJobId(jobId: string): Promise<ProcessingResultRecord | undefined> {
@@ -92,6 +105,13 @@ export class InMemoryProcessingResultRepository implements ProcessingResultRepos
 
   public async save(result: ProcessingResultRecord): Promise<void> {
     this.results.set(result.resultId, result);
+  }
+}
+
+@Injectable()
+export class InMemoryUnitOfWork implements UnitOfWorkPort {
+  public async runInTransaction<T>(work: () => Promise<T>): Promise<T> {
+    return work();
   }
 }
 
@@ -107,4 +127,3 @@ export class InMemoryAuditRepository implements AuditPort {
     return [...this.events];
   }
 }
-
