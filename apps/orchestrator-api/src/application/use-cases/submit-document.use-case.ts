@@ -17,17 +17,12 @@ import {
   DEFAULT_PIPELINE_VERSION,
   ErrorCode,
   JobStatus,
+  RedactionPolicyService,
   TransientFailureError,
   type AuditActor,
   type ProcessingJobRequestedMessage,
   ValidationError
 } from '@document-parser/shared-kernel';
-import { CompatibleResultReusePolicy } from '../../domain/policies/compatible-result-reuse.policy';
-import { DocumentAcceptancePolicy } from '../../domain/policies/document-acceptance.policy';
-import { DocumentStoragePolicy } from '../../domain/policies/document-storage.policy';
-import { PageCountPolicy } from '../../domain/policies/page-count.policy';
-import { DocumentHash } from '../../domain/value-objects/document-hash';
-import { CompatibilityKey } from '../../domain/value-objects/compatibility-key';
 import type { JobResponse } from '../../contracts/http';
 import type { DocumentRecord, ProcessingJobRecord, ProcessingResultRecord } from '../../contracts/models';
 import type {
@@ -41,12 +36,22 @@ import type {
   IdGeneratorPort,
   JobAttemptRepositoryPort,
   JobPublisherPort,
+  LoggingPort,
+  MetricsPort,
   PageCounterPort,
   ProcessingJobRepositoryPort,
   ProcessingResultRepositoryPort,
+  TracingPort,
   UnitOfWorkPort
 } from '../../contracts/ports';
 import { TOKENS } from '../../contracts/tokens';
+import { CompatibleResultReusePolicy } from '../../domain/policies/compatible-result-reuse.policy';
+import { DocumentAcceptancePolicy } from '../../domain/policies/document-acceptance.policy';
+import { DocumentStoragePolicy } from '../../domain/policies/document-storage.policy';
+import { PageCountPolicy } from '../../domain/policies/page-count.policy';
+import { RetentionPolicyService } from '../../domain/services/retention-policy.service';
+import { CompatibilityKey } from '../../domain/value-objects/compatibility-key';
+import { DocumentHash } from '../../domain/value-objects/document-hash';
 import type { SubmitDocumentCommand } from '../commands/submit-document.command';
 
 @Injectable()
@@ -68,103 +73,190 @@ export class SubmitDocumentUseCase {
     private readonly compatibleResults: CompatibleResultLookupPort,
     @Inject(TOKENS.JOB_PUBLISHER) private readonly publisher: JobPublisherPort,
     @Inject(TOKENS.AUDIT) private readonly audit: AuditPort,
+    @Inject(TOKENS.LOGGING) private readonly logging: LoggingPort,
+    @Inject(TOKENS.METRICS) private readonly metrics: MetricsPort,
+    @Inject(TOKENS.TRACING) private readonly tracing: TracingPort,
     @Inject(TOKENS.UNIT_OF_WORK) private readonly unitOfWork: UnitOfWorkPort,
     private readonly acceptancePolicy: DocumentAcceptancePolicy,
     private readonly reusePolicy: CompatibleResultReusePolicy,
     private readonly pageCountPolicy: PageCountPolicy,
-    private readonly documentStoragePolicy: DocumentStoragePolicy
+    private readonly documentStoragePolicy: DocumentStoragePolicy,
+    private readonly retentionPolicy: RetentionPolicyService,
+    private readonly redactionPolicy: RedactionPolicyService
   ) {}
 
-  public async execute(command: SubmitDocumentCommand, actor: AuditActor): Promise<JobResponse> {
-    this.authorizeSubmission(actor);
-    this.ensureUploadedFileIsNotEmpty(command);
+  public async execute(command: SubmitDocumentCommand, actor: AuditActor, traceId: string): Promise<JobResponse> {
+    const startedAt = Date.now();
 
-    const pageCount = await this.countDocumentPages(command);
-    this.validateUploadedFileConstraints(command, pageCount);
+    return this.tracing.runInSpan(
+      {
+        traceId,
+        spanName: 'orchestrator.submit_document',
+        attributes: {
+          actorId: actor.actorId,
+          requestedMode: command.requestedMode,
+          forceReprocess: command.forceReprocess
+        }
+      },
+      async () => {
+        try {
+          this.authorizeSubmission(actor);
+          this.ensureUploadedFileIsNotEmpty(command);
 
-    const hash = await this.calculateDocumentHash(command);
-    const now = this.clock.now();
-    const requestedMode = command.requestedMode;
-    const { pipelineVersion, outputVersion } = this.versionStamps.buildJobStamp({
-      pipelineVersion: DEFAULT_PIPELINE_VERSION,
-      outputVersion: DEFAULT_OUTPUT_VERSION
-    });
-    const existingDocument = await this.findExistingDocumentByHash(hash);
-    const compatibilityKey = this.buildCompatibilityKey({
-      hash,
-      requestedMode,
-      pipelineVersion,
-      outputVersion
-    });
-    const compatibleResult = await this.findCompatibleResultForSubmission({
-      hash,
-      requestedMode,
-      pipelineVersion,
-      outputVersion,
-      forceReprocess: command.forceReprocess
-    });
+          const pageCount = await this.countDocumentPages(command);
+          this.validateUploadedFileConstraints(command, pageCount);
 
-    if (this.reusePolicy.shouldReuse({ compatibleResult, forceReprocess: command.forceReprocess })) {
-      return this.finalizeDeduplicatedJob({
-        actor,
-        compatibleResult: compatibleResult as ProcessingResultRecord,
-        compatibilityKey,
-        documentId: existingDocument?.documentId ?? (compatibleResult as ProcessingResultRecord).documentId,
-        requestedMode,
-        pipelineVersion,
-        outputVersion,
-        now
-      });
-    }
+          const hash = await this.calculateDocumentHash(command);
+          const now = this.clock.now();
+          const requestedMode = command.requestedMode;
+          const { pipelineVersion, outputVersion } = this.versionStamps.buildJobStamp({
+            pipelineVersion: DEFAULT_PIPELINE_VERSION,
+            outputVersion: DEFAULT_OUTPUT_VERSION
+          });
+          const existingDocument = await this.findExistingDocumentByHash(hash);
+          const compatibilityKey = this.buildCompatibilityKey({
+            hash,
+            requestedMode,
+            pipelineVersion,
+            outputVersion
+          });
+          const compatibleResult = await this.findCompatibleResultForSubmission({
+            hash,
+            requestedMode,
+            pipelineVersion,
+            outputVersion,
+            forceReprocess: command.forceReprocess
+          });
 
-    const canonicalDocument = await this.storeOriginalDocumentBinaryWhenNeeded({
-      command,
-      existingDocument,
-      hash,
-      pageCount,
-      now
-    });
-    const persistedSubmission = await this.persistAcceptedSubmission({
-      actor,
-      document: canonicalDocument.document,
-      storedNewBinary: canonicalDocument.storedNewBinary,
-      requestedMode,
-      pipelineVersion,
-      outputVersion,
-      forceReprocess: command.forceReprocess,
-      now
-    });
+          if (this.reusePolicy.shouldReuse({ compatibleResult, forceReprocess: command.forceReprocess })) {
+            const response = await this.finalizeDeduplicatedJob({
+              actor,
+              compatibleResult: compatibleResult as ProcessingResultRecord,
+              compatibilityKey,
+              documentId: existingDocument?.documentId ?? (compatibleResult as ProcessingResultRecord).documentId,
+              requestedMode,
+              pipelineVersion,
+              outputVersion,
+              traceId,
+              now
+            });
 
-    try {
-      await this.publishProcessingJobRequested({
-        documentId: canonicalDocument.document.documentId,
-        jobId: persistedSubmission.job.jobId,
-        attemptId: persistedSubmission.attempt.attemptId,
-        requestedMode,
-        pipelineVersion,
-        publishedAt: now.toISOString()
-      });
-    } catch (error) {
-      await this.markJobAsPublishFailed({
-        actor,
-        job: persistedSubmission.job,
-        now,
-        errorMessage: this.buildPublishErrorMessage(error)
-      });
-      throw new TransientFailureError('Processing job persisted but queue publication failed', {
-        jobId: persistedSubmission.job.jobId,
-        documentId: persistedSubmission.job.documentId
-      });
-    }
+            await this.logging.log({
+              level: 'info',
+              message: 'Document submission reused a compatible result',
+              context: 'SubmitDocumentUseCase',
+              traceId,
+              data: this.redactionPolicy.redact({
+                jobId: response.jobId,
+                documentId: response.documentId,
+                reusedResult: response.reusedResult
+              }) as Record<string, unknown>,
+              recordedAt: now
+            });
+            await this.metrics.increment({
+              name: 'orchestrator.submit_document.reused_result',
+              traceId
+            });
 
-    const queuedJob = await this.finalizeQueuedJob({
-      actor,
-      job: persistedSubmission.job,
-      attempt: persistedSubmission.attempt,
-      now
-    });
+            return response;
+          }
 
-    return this.toJobResponse(queuedJob);
+          const canonicalDocument = await this.storeOriginalDocumentBinaryWhenNeeded({
+            command,
+            existingDocument,
+            hash,
+            pageCount,
+            now
+          });
+          const persistedSubmission = await this.persistAcceptedSubmission({
+            actor,
+            document: canonicalDocument.document,
+            storedNewBinary: canonicalDocument.storedNewBinary,
+            requestedMode,
+            pipelineVersion,
+            outputVersion,
+            forceReprocess: command.forceReprocess,
+            traceId,
+            now
+          });
+
+          try {
+            await this.publishProcessingJobRequested({
+              documentId: canonicalDocument.document.documentId,
+              jobId: persistedSubmission.job.jobId,
+              attemptId: persistedSubmission.attempt.attemptId,
+              traceId,
+              requestedMode,
+              pipelineVersion,
+              publishedAt: now.toISOString()
+            });
+          } catch (error) {
+            await this.markJobAsPublishFailed({
+              actor,
+              job: persistedSubmission.job,
+              traceId,
+              now,
+              errorMessage: this.buildPublishErrorMessage(error)
+            });
+            throw new TransientFailureError('Processing job persisted but queue publication failed', {
+              jobId: persistedSubmission.job.jobId,
+              documentId: persistedSubmission.job.documentId
+            });
+          }
+
+          const queuedJob = await this.finalizeQueuedJob({
+            actor,
+            job: persistedSubmission.job,
+            attempt: persistedSubmission.attempt,
+            traceId,
+            now
+          });
+
+          await this.logging.log({
+            level: 'info',
+            message: 'Document submission queued successfully',
+            context: 'SubmitDocumentUseCase',
+            traceId,
+            data: this.redactionPolicy.redact({
+              jobId: queuedJob.jobId,
+              documentId: queuedJob.documentId,
+              requestedMode: queuedJob.requestedMode
+            }) as Record<string, unknown>,
+            recordedAt: now
+          });
+          await this.metrics.increment({
+            name: 'orchestrator.submit_document.succeeded',
+            traceId
+          });
+
+          return this.toJobResponse(queuedJob);
+        } catch (error) {
+          await this.metrics.increment({
+            name: 'orchestrator.submit_document.failed',
+            traceId
+          });
+          await this.logging.log({
+            level: 'error',
+            message: 'Document submission failed',
+            context: 'SubmitDocumentUseCase',
+            traceId,
+            data: this.redactionPolicy.redact({
+              actorId: actor.actorId,
+              requestedMode: command.requestedMode,
+              errorMessage: error instanceof Error ? error.message : 'Unexpected failure'
+            }) as Record<string, unknown>,
+            recordedAt: this.clock.now()
+          });
+          throw error;
+        } finally {
+          await this.metrics.recordHistogram({
+            name: 'orchestrator.submit_document.duration_ms',
+            value: Date.now() - startedAt,
+            traceId
+          });
+        }
+      }
+    );
   }
 
   private authorizeSubmission(actor: AuditActor): void {
@@ -254,6 +346,7 @@ export class SubmitDocumentUseCase {
     pipelineVersion: string;
     outputVersion: string;
     forceReprocess: boolean;
+    traceId: string;
     now: Date;
   }): Promise<{ job: ProcessingJobRecord; attempt: JobAttemptRecord }> {
     const validatedJob = markJobAsValidated({
@@ -286,9 +379,11 @@ export class SubmitDocumentUseCase {
       await this.unitOfWork.runInTransaction(async () => {
         if (input.storedNewBinary) {
           await this.documents.save(input.document);
-          await this.audit.record({
-            eventId: this.idGenerator.next('audit'),
+          await this.recordAuditEvent({
             eventType: 'DOCUMENT_STORED',
+            aggregateType: 'DOCUMENT',
+            aggregateId: input.document.documentId,
+            traceId: input.traceId,
             actor: input.actor,
             metadata: {
               documentId: input.document.documentId,
@@ -300,9 +395,11 @@ export class SubmitDocumentUseCase {
 
         await this.jobs.save(job);
         await this.attempts.save(attempt);
-        await this.audit.record({
-          eventId: this.idGenerator.next('audit'),
+        await this.recordAuditEvent({
           eventType: 'DOCUMENT_ACCEPTED',
+          aggregateType: 'PROCESSING_JOB',
+          aggregateId: job.jobId,
+          traceId: input.traceId,
           actor: input.actor,
           metadata: {
             documentId: input.document.documentId,
@@ -331,6 +428,7 @@ export class SubmitDocumentUseCase {
     actor: AuditActor;
     job: ProcessingJobRecord;
     attempt: JobAttemptRecord;
+    traceId: string;
     now: Date;
   }): Promise<ProcessingJobRecord> {
     const queuedJob = markJobAsQueued({
@@ -344,9 +442,11 @@ export class SubmitDocumentUseCase {
     await this.unitOfWork.runInTransaction(async () => {
       await this.jobs.save(queuedJob);
       await this.attempts.save(queuedAttempt);
-      await this.audit.record({
-        eventId: this.idGenerator.next('audit'),
+      await this.recordAuditEvent({
         eventType: 'PROCESSING_JOB_QUEUED',
+        aggregateType: 'PROCESSING_JOB',
+        aggregateId: input.job.jobId,
+        traceId: input.traceId,
         actor: input.actor,
         metadata: {
           documentId: input.job.documentId,
@@ -369,6 +469,7 @@ export class SubmitDocumentUseCase {
     requestedMode: string;
     pipelineVersion: string;
     outputVersion: string;
+    traceId: string;
     now: Date;
   }): Promise<JobResponse> {
     const job = createDeduplicatedJob({
@@ -401,11 +502,14 @@ export class SubmitDocumentUseCase {
         totalLatencyMs: input.compatibleResult.totalLatencyMs,
         sourceJobId: input.compatibleResult.jobId,
         createdAt: input.now,
-        updatedAt: input.now
+        updatedAt: input.now,
+        retentionUntil: this.retentionPolicy.calculateProcessingResultRetentionUntil(input.now)
       });
-      await this.audit.record({
-        eventId: this.idGenerator.next('audit'),
+      await this.recordAuditEvent({
         eventType: 'COMPATIBLE_RESULT_REUSED',
+        aggregateType: 'PROCESSING_JOB',
+        aggregateId: job.jobId,
+        traceId: input.traceId,
         actor: input.actor,
         metadata: {
           documentId: input.documentId,
@@ -423,6 +527,7 @@ export class SubmitDocumentUseCase {
   private async markJobAsPublishFailed(input: {
     actor: AuditActor;
     job: ProcessingJobRecord;
+    traceId: string;
     now: Date;
     errorMessage: string;
   }): Promise<void> {
@@ -435,9 +540,11 @@ export class SubmitDocumentUseCase {
 
     await this.unitOfWork.runInTransaction(async () => {
       await this.jobs.save(failedJob);
-      await this.audit.record({
-        eventId: this.idGenerator.next('audit'),
+      await this.recordAuditEvent({
         eventType: 'PROCESSING_JOB_QUEUEING_FAILED',
+        aggregateType: 'PROCESSING_JOB',
+        aggregateId: input.job.jobId,
+        traceId: input.traceId,
         actor: input.actor,
         metadata: {
           documentId: input.job.documentId,
@@ -473,5 +580,33 @@ export class SubmitDocumentUseCase {
       reusedResult: job.reusedResult,
       createdAt: job.createdAt.toISOString()
     };
+  }
+
+  private async recordAuditEvent(input: {
+    eventType: string;
+    aggregateType?: string;
+    aggregateId?: string;
+    traceId: string;
+    actor: AuditActor;
+    metadata?: Record<string, unknown>;
+    redactedPayload?: Record<string, unknown>;
+    createdAt: Date;
+  }): Promise<void> {
+    await this.audit.record({
+      eventId: this.idGenerator.next('audit'),
+      eventType: input.eventType,
+      aggregateType: input.aggregateType,
+      aggregateId: input.aggregateId,
+      traceId: input.traceId,
+      actor: input.actor,
+      metadata: input.metadata,
+      redactedPayload:
+        input.redactedPayload ??
+        (input.metadata === undefined
+          ? undefined
+          : (this.redactionPolicy.redact(input.metadata) as Record<string, unknown>)),
+      createdAt: input.createdAt,
+      retentionUntil: this.retentionPolicy.calculateAuditRetentionUntil(input.createdAt)
+    });
   }
 }
