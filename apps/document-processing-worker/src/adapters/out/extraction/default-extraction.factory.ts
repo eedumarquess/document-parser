@@ -3,10 +3,14 @@ import { HeuristicEvaluationService } from '../../../domain/extraction/heuristic
 import { SensitiveDataMaskingService } from '../../../domain/extraction/sensitive-data-masking.service';
 import { TextConsolidationService } from '../../../domain/extraction/text-consolidation.service';
 import { TextNormalizationService } from '../../../domain/extraction/text-normalization.service';
-import { ProcessingOutcomePolicy } from '../../../domain/policies/processing-outcome.policy';
+import type { ProcessingOutcomePolicy } from '../../../domain/policies/processing-outcome.policy';
 import { DefaultPageRendererAdapter } from './default-page-renderer.adapter';
 import { DeterministicOcrEngineAdapter } from './deterministic-ocr-engine.adapter';
 import { HuggingFaceLlmExtractionAdapter } from './huggingface-llm-extraction.adapter';
+import { ArtifactReferenceFactory } from './internal/artifact-reference.factory';
+import { FallbackResolutionStage } from './internal/fallback-resolution.stage';
+import { OutcomeAssemblyStage } from './internal/outcome-assembly.stage';
+import { PageExtractionStage } from './internal/page-extraction.stage';
 import { LocalHeuristicLlmExtractionAdapter } from './local-heuristic-llm-extraction.adapter';
 import { OcrLlmExtractionPipelineAdapter } from './ocr-llm-extraction.pipeline.adapter';
 import { OpenRouterLlmExtractionAdapter } from './openrouter-llm-extraction.adapter';
@@ -16,19 +20,35 @@ export function createDefaultExtractionPipeline(
   overrides: WorkerProviderOverrides = {}
 ): OcrLlmExtractionPipelineAdapter {
   const normalization = new TextNormalizationService();
+  const artifactReferenceFactory = new ArtifactReferenceFactory();
   const pageRenderer = overrides.pageRenderer ?? new DefaultPageRendererAdapter();
   const ocrEngine = overrides.ocrEngine ?? new DeterministicOcrEngineAdapter();
   const llmExtraction = overrides.llmExtraction ?? createConfiguredLlmExtractionPort();
+  const heuristicEvaluationService = new HeuristicEvaluationService(normalization);
+  const textConsolidationService = new TextConsolidationService();
 
   return new OcrLlmExtractionPipelineAdapter(
-    policy,
-    pageRenderer,
-    ocrEngine,
-    llmExtraction,
-    normalization,
-    new HeuristicEvaluationService(normalization),
-    new SensitiveDataMaskingService(),
-    new TextConsolidationService()
+    new PageExtractionStage(
+      pageRenderer,
+      ocrEngine,
+      normalization,
+      heuristicEvaluationService,
+      artifactReferenceFactory
+    ),
+    new FallbackResolutionStage(
+      llmExtraction,
+      heuristicEvaluationService,
+      new SensitiveDataMaskingService(),
+      normalization,
+      textConsolidationService,
+      artifactReferenceFactory
+    ),
+    new OutcomeAssemblyStage(
+      policy,
+      heuristicEvaluationService,
+      textConsolidationService,
+      llmExtraction
+    )
   );
 }
 
