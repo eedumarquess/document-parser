@@ -85,7 +85,8 @@ Indices sugeridos: `attemptId` unico, `jobId`, `status`, `pipelineVersion`.
 | `resultId` | `string` | Sim | ID publico do resultado |
 | `jobId` | `string` | Sim | Job que gerou o resultado |
 | `documentId` | `string` | Sim | Documento processado |
-| `status` | `string` | Sim | Resultado final: `COMPLETED`, `PARTIAL`, `FAILED` |
+| `compatibilityKey` | `string` | Sim | Chave oficial de idempotencia para lookup e reaproveitamento compativel |
+| `status` | `string` | Sim | Resultado final persistido: `COMPLETED` ou `PARTIAL` |
 | `requestedMode` | `string` | Sim | Modo pedido para o job relacionado |
 | `outputVersion` | `string` | Sim | Versao do contrato de saida |
 | `pipelineVersion` | `string` | Sim | Versao da pipeline |
@@ -100,7 +101,7 @@ Indices sugeridos: `attemptId` unico, `jobId`, `status`, `pipelineVersion`.
 | `createdAt` | `date` | Sim | Data de criacao |
 | `updatedAt` | `date` | Sim | Data de atualizacao |
 
-Indices sugeridos: `resultId` unico, `jobId`, `documentId`, `status`, `pipelineVersion`, `createdAt`.
+Indices sugeridos: `resultId` unico, `jobId`, `documentId`, `status`, `compatibilityKey + createdAt`, `pipelineVersion`, `createdAt`.
 
 ## `page_artifacts`
 
@@ -164,3 +165,5 @@ Indices sugeridos: `dlqEventId` unico, `jobId`, `reasonCode`, `lastSeenAt`.
 ## Fora do MVP
 
 `Template Management` fica fora do contrato e do schema do MVP.
+
+Nao existem neste schema as colecoes `templates` ou `template_versions`.
