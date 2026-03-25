@@ -9,7 +9,8 @@ import {
   InMemoryDocumentRepository,
   InMemoryJobAttemptRepository,
   InMemoryProcessingJobRepository,
-  InMemoryProcessingResultRepository
+  InMemoryProcessingResultRepository,
+  InMemoryUnitOfWork
 } from './adapters/out/repositories/in-memory.repositories';
 import { InMemoryBinaryStorageAdapter } from './adapters/out/storage/in-memory-binary-storage.adapter';
 import { Sha256HashingAdapter } from './adapters/out/storage/sha256-hashing.adapter';
@@ -23,6 +24,7 @@ import type {
   AuthorizationPort,
   BinaryStoragePort,
   ClockPort,
+  CompatibleResultLookupPort,
   DocumentRepositoryPort,
   HashingPort,
   IdGeneratorPort,
@@ -30,11 +32,14 @@ import type {
   JobPublisherPort,
   PageCounterPort,
   ProcessingJobRepositoryPort,
-  ProcessingResultRepositoryPort
+  ProcessingResultRepositoryPort,
+  UnitOfWorkPort
 } from './contracts/ports';
 import { TOKENS } from './contracts/tokens';
 import { CompatibleResultReusePolicy } from './domain/policies/compatible-result-reuse.policy';
+import { DocumentStoragePolicy } from './domain/policies/document-storage.policy';
 import { DocumentAcceptancePolicy } from './domain/policies/document-acceptance.policy';
+import { PageCountPolicy } from './domain/policies/page-count.policy';
 import { RetentionPolicyService } from './domain/services/retention-policy.service';
 
 export type OrchestratorProviderOverrides = Partial<{
@@ -47,14 +52,17 @@ export type OrchestratorProviderOverrides = Partial<{
   jobs: ProcessingJobRepositoryPort;
   attempts: JobAttemptRepositoryPort;
   results: ProcessingResultRepositoryPort;
+  compatibleResults: CompatibleResultLookupPort;
   publisher: JobPublisherPort;
   audit: AuditPort;
   authorization: AuthorizationPort;
+  unitOfWork: UnitOfWorkPort;
 }>;
 
 @Module({})
 export class OrchestratorApiModule {
   public static register(overrides: OrchestratorProviderOverrides = {}): DynamicModule {
+    const results = overrides.results ?? new InMemoryProcessingResultRepository();
     const providers: Provider[] = [
       { provide: TOKENS.CLOCK, useValue: overrides.clock ?? new SystemClockAdapter() },
       { provide: TOKENS.ID_GENERATOR, useValue: overrides.idGenerator ?? new RandomIdGeneratorAdapter() },
@@ -64,7 +72,12 @@ export class OrchestratorApiModule {
       { provide: TOKENS.DOCUMENT_REPOSITORY, useValue: overrides.documents ?? new InMemoryDocumentRepository() },
       { provide: TOKENS.JOB_REPOSITORY, useValue: overrides.jobs ?? new InMemoryProcessingJobRepository() },
       { provide: TOKENS.ATTEMPT_REPOSITORY, useValue: overrides.attempts ?? new InMemoryJobAttemptRepository() },
-      { provide: TOKENS.RESULT_REPOSITORY, useValue: overrides.results ?? new InMemoryProcessingResultRepository() },
+      { provide: TOKENS.RESULT_REPOSITORY, useValue: results },
+      {
+        provide: TOKENS.COMPATIBLE_RESULT_LOOKUP,
+        useValue: overrides.compatibleResults ?? results
+      },
+      { provide: TOKENS.UNIT_OF_WORK, useValue: overrides.unitOfWork ?? new InMemoryUnitOfWork() },
       { provide: TOKENS.JOB_PUBLISHER, useValue: overrides.publisher ?? new InMemoryJobPublisherAdapter() },
       { provide: TOKENS.AUDIT, useValue: overrides.audit ?? new InMemoryAuditRepository() },
       {
@@ -73,6 +86,8 @@ export class OrchestratorApiModule {
       },
       DocumentAcceptancePolicy,
       CompatibleResultReusePolicy,
+      PageCountPolicy,
+      DocumentStoragePolicy,
       RetentionPolicyService,
       SubmitDocumentUseCase,
       GetJobStatusUseCase,
@@ -88,4 +103,3 @@ export class OrchestratorApiModule {
     };
   }
 }
-
