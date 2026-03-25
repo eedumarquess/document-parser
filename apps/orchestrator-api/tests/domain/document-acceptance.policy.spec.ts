@@ -70,6 +70,7 @@ describe('CompatibleResultReusePolicy', () => {
           resultId: 'result-1',
           jobId: 'job-1',
           documentId: 'doc-1',
+          compatibilityKey: 'sha256:doc:STANDARD:git-sha:1.0.0',
           status: JobStatus.COMPLETED,
           requestedMode: 'STANDARD',
           pipelineVersion: 'git-sha',
@@ -94,6 +95,7 @@ describe('CompatibleResultReusePolicy', () => {
           resultId: 'result-1',
           jobId: 'job-1',
           documentId: 'doc-1',
+          compatibilityKey: 'sha256:doc:STANDARD:git-sha:1.0.0',
           status: JobStatus.COMPLETED,
           requestedMode: 'STANDARD',
           pipelineVersion: 'git-sha',
@@ -107,6 +109,31 @@ describe('CompatibleResultReusePolicy', () => {
           updatedAt: new Date()
         },
         forceReprocess: true
+      })
+    ).toBe(false);
+  });
+
+  it('ignores failed compatible results even when reprocess is not forced', () => {
+    expect(
+      policy.shouldReuse({
+        compatibleResult: {
+          resultId: 'result-1',
+          jobId: 'job-1',
+          documentId: 'doc-1',
+          compatibilityKey: 'sha256:doc:STANDARD:git-sha:1.0.0',
+          status: JobStatus.FAILED,
+          requestedMode: 'STANDARD',
+          pipelineVersion: 'git-sha',
+          outputVersion: '1.0.0',
+          confidence: 0,
+          warnings: [],
+          payload: 'payload',
+          engineUsed: 'OCR',
+          totalLatencyMs: 1000,
+          createdAt: new Date(),
+          updatedAt: new Date()
+        },
+        forceReprocess: false
       })
     ).toBe(false);
   });
