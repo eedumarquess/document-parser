@@ -4,9 +4,9 @@
   "private": true,
   "packageManager": "pnpm@10.6.3",
   "scripts": {
-    "build": "tsc -b packages/shared-kernel/tsconfig.json packages/testkit/tsconfig.json apps/orchestrator-api/tsconfig.json apps/document-processing-worker/tsconfig.json --force",
+    "build": "tsc -b packages/shared-kernel/tsconfig.json packages/document-processing-domain/tsconfig.json packages/testkit/tsconfig.json apps/orchestrator-api/tsconfig.json apps/document-processing-worker/tsconfig.json --force",
     "lint": "eslint .",
-    "typecheck": "tsc -b packages/shared-kernel/tsconfig.json packages/testkit/tsconfig.json apps/orchestrator-api/tsconfig.json apps/document-processing-worker/tsconfig.json --force --pretty false",
+    "typecheck": "tsc -b packages/shared-kernel/tsconfig.json packages/document-processing-domain/tsconfig.json packages/testkit/tsconfig.json apps/orchestrator-api/tsconfig.json apps/document-processing-worker/tsconfig.json --force --pretty false",
     "test": "corepack pnpm run test:domain && corepack pnpm run test:application && corepack pnpm run test:contracts && corepack pnpm run test:e2e",
     "test:domain": "jest --config jest.workspace.config.cjs --selectProjects orchestrator-domain worker-domain",
     "test:application": "jest --config jest.workspace.config.cjs --selectProjects orchestrator-application worker-application",

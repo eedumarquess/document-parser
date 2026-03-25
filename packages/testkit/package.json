@@ -10,7 +10,7 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
+    "@document-parser/document-processing-domain": "workspace:*",
     "@document-parser/shared-kernel": "workspace:*"
   }
 }
-
