@@ -189,23 +189,6 @@ describeRealInfra('Real infrastructure adapter contracts', () => {
         createdAt: new Date('2026-03-25T12:05:00.000Z'),
         updatedAt: new Date('2026-03-25T12:05:00.000Z')
       });
-      await results.save({
-        resultId: 'result-failed',
-        jobId: 'job-3',
-        documentId: 'doc-1',
-        compatibilityKey,
-        status: JobStatus.FAILED,
-        requestedMode: 'STANDARD',
-        pipelineVersion: 'git-sha',
-        outputVersion: '1.0.0',
-        confidence: 0,
-        warnings: [],
-        payload: 'failed',
-        engineUsed: 'OCR',
-        totalLatencyMs: 120,
-        createdAt: new Date('2026-03-25T12:10:00.000Z'),
-        updatedAt: new Date('2026-03-25T12:10:00.000Z')
-      });
       await audit.record({
         eventId: 'audit-1',
         eventType: 'DOCUMENT_ACCEPTED',
@@ -282,14 +265,15 @@ describeRealInfra('Real infrastructure adapter contracts', () => {
   });
 
   it('publishes the minimal queue contract to RabbitMQ', async () => {
-    await publisher.publish({
+    const payload = {
       documentId: 'doc-1',
       jobId: 'job-1',
       attemptId: 'attempt-1',
       requestedMode: 'STANDARD',
       pipelineVersion: 'git-sha',
       publishedAt: '2026-03-25T12:00:00.000Z'
-    });
+    };
+    await publisher.publishRequested(payload);
 
     const connection = await connectAmqp(rabbitMqUrl);
     const channel = await connection.createChannel();
@@ -297,16 +281,73 @@ describeRealInfra('Real infrastructure adapter contracts', () => {
     const message = await channel.get(queueName, { noAck: true });
 
     expect(message).not.toBe(false);
-    expect(message && message.content.toString('utf8')).toBe(
-      JSON.stringify({
-        documentId: 'doc-1',
-        jobId: 'job-1',
-        attemptId: 'attempt-1',
-        requestedMode: 'STANDARD',
-        pipelineVersion: 'git-sha',
-        publishedAt: '2026-03-25T12:00:00.000Z'
-      })
-    );
+    expect(message && message.content.toString('utf8')).toBe(JSON.stringify(payload));
+
+    await channel.close();
+    await connection.close();
+  });
+
+  it('routes retry messages back to the main queue after TTL', async () => {
+    const payload = {
+      documentId: 'doc-retry',
+      jobId: 'job-retry',
+      attemptId: 'attempt-retry',
+      requestedMode: 'STANDARD',
+      pipelineVersion: 'git-sha',
+      publishedAt: '2026-03-25T12:00:02.000Z'
+    };
+    await publisher.publishRetry(payload, 1);
+
+    const connection = await connectAmqp(rabbitMqUrl);
+    const channel = await connection.createChannel();
+    await channel.assertQueue(queueName, { durable: true });
+
+    let retriedMessage = await channel.get(queueName, { noAck: true });
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      if (retriedMessage !== false) {
+        break;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      retriedMessage = await channel.get(queueName, { noAck: true });
+    }
+
+    expect(retriedMessage).not.toBe(false);
+    if (retriedMessage === false) {
+      throw new Error('expected message to return from retry queue');
+    }
+    expect(retriedMessage.content.toString('utf8')).toBe(JSON.stringify(payload));
+
+    await channel.close();
+    await connection.close();
+  });
+
+  it('dead-letters rejected main-queue messages to the broker DLQ', async () => {
+    const payload = {
+      documentId: 'doc-dlq',
+      jobId: 'job-dlq',
+      attemptId: 'attempt-dlq',
+      requestedMode: 'STANDARD',
+      pipelineVersion: 'git-sha',
+      publishedAt: '2026-03-25T12:00:03.000Z'
+    };
+    await publisher.publishRequested(payload);
+
+    const connection = await connectAmqp(rabbitMqUrl);
+    const channel = await connection.createChannel();
+    await channel.assertQueue(queueName, { durable: true });
+    await channel.assertQueue(`${queueName}.dlq`, { durable: true });
+
+    const message = await channel.get(queueName, { noAck: false });
+    expect(message).not.toBe(false);
+    if (message === false) {
+      throw new Error('expected message in main queue');
+    }
+    channel.nack(message, false, false);
+
+    const dlqMessage = await channel.get(`${queueName}.dlq`, { noAck: true });
+    expect(dlqMessage).not.toBe(false);
+    expect(dlqMessage && dlqMessage.content.toString('utf8')).toBe(JSON.stringify(payload));
 
     await channel.close();
     await connection.close();

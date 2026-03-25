@@ -23,7 +23,7 @@ describe('In-memory adapter contracts', () => {
       received.push(message.jobId);
     });
 
-    await publisher.publish({
+    await publisher.publishRequested({
       documentId: 'doc-1',
       jobId: 'job-1',
       attemptId: 'attempt-1',
@@ -44,6 +44,36 @@ describe('In-memory adapter contracts', () => {
       }
     ]);
     expect(received).toEqual(['job-1']);
+  });
+
+  it('records retry publications without exposing queue names to callers', async () => {
+    const publisher = new InMemoryJobPublisherAdapter();
+
+    await publisher.publishRetry(
+      {
+        documentId: 'doc-2',
+        jobId: 'job-2',
+        attemptId: 'attempt-2',
+        requestedMode: 'STANDARD',
+        pipelineVersion: 'git-sha',
+        publishedAt: '2026-03-25T12:00:02.000Z'
+      },
+      2
+    );
+
+    expect(publisher.retryMessages).toEqual([
+      {
+        message: {
+          documentId: 'doc-2',
+          jobId: 'job-2',
+          attemptId: 'attempt-2',
+          requestedMode: 'STANDARD',
+          pipelineVersion: 'git-sha',
+          publishedAt: '2026-03-25T12:00:02.000Z'
+        },
+        retryAttempt: 2
+      }
+    ]);
   });
 
   it('counts PDF pages from the uploaded binary', async () => {
