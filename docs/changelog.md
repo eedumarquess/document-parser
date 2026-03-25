@@ -4,6 +4,53 @@ Todas as mudancas relevantes deste repositorio devem ser registradas aqui.
 
 O formato segue uma adaptacao simples de `Keep a Changelog` e usa as tags de contexto dos commits como apoio para rastreabilidade.
 
+## [2026-03-25] - Audit/Observability com traceId, TTL e replay manual de DLQ
+
+### Added
+
+- Base vendor-agnostic de observabilidade no `shared-kernel`, com `LoggingPort`, `MetricsPort`, `TracingPort`, adapters JSON para runtime e adapters em memoria para testes.
+- Politicas canonicas de `redaction` e `retention` para proteger logs, `redactedPayload` e colecoes observaveis sem vazar `rawText`, `rawPayload`, `promptText`, `responseText` ou binarios.
+- Correlacao ponta a ponta por `traceId`, da entrada HTTP (`x-trace-id`) ate o payload da fila e o processamento do worker.
+- Novo endpoint owner-only `POST /v1/parsing/dead-letters/:dlqEventId/replay` para replay manual de DLQ com criacao de novo job de reprocessamento.
+
+### Changed
+
+- `AuditEventRecord`, `DeadLetterRecord`, `ProcessingResultRecord` e `PageArtifactRecord` passaram a carregar metadados de agregacao, `traceId`, `retentionUntil` e, quando aplicavel, `replayedAt`.
+- `SubmitDocumentUseCase`, `GetJobStatusUseCase`, `GetProcessingResultUseCase`, `ReprocessDocumentUseCase` e `ProcessJobMessageUseCase` passaram a emitir spans, logs estruturados, metricas e auditoria com payload redigido.
+- `GET /v1/parsing/jobs/:jobId` agora registra `JOB_STATUS_QUERIED`, e os adapters Mongo criam TTL indexes para `audit_events`, `dead_letter_events`, `processing_results` e `page_artifacts`.
+- `ReplayDeadLetterUseCase` marca `dead_letter_events.replayedAt` apenas apos publish bem-sucedido e registra `DEAD_LETTER_REPLAY_FAILED` quando o replay falha.
+
+### Fixed
+
+- O worker e a API deixaram de perder a correlacao operacional entre HTTP, fila, auditoria e DLQ durante retries, falhas terminais e reprocessamentos.
+- Logs e eventos observaveis agora bloqueiam persistencia acidental de texto bruto de OCR, prompts, respostas de LLM e outros payloads sensiveis.
+- A estrategia de retencao passou a ser canonica entre API e worker, evitando expiracao inconsistente entre resultados, artefatos e auditoria.
+
+### Technical Notes
+
+- O shape JSON dos endpoints de jobs e resultados foi preservado; a unica mudanca externa no fluxo existente foi o header `x-trace-id`.
+- O replay manual nao reabre o job falhado: ele cria um novo job com novo `jobId`, novo `attemptId`, `attemptNumber = 1` e `reprocessOfJobId` apontando para o job original.
+- Registros legados sem `retentionUntil` continuam legiveis; a expiracao automatica passa a valer apenas para os dados persistidos com o novo contrato.
+
+### Commit Contexts
+
+- `feat(shared-observability-core)`
+- `feat(shared-observability-contracts)`
+- `feat(document-domain-observability)`
+- `feat(orchestrator-observability-contracts)`
+- `feat(orchestrator-observability-infra)`
+- `feat(orchestrator-observability-http)`
+- `feat(orchestrator-observability-jobs)`
+- `feat(orchestrator-observability-results)`
+- `feat(worker-observability-contracts)`
+- `bug(worker-observability-runtime)`
+- `feat(worker-observability-repositories)`
+- `feat(orchestrator-observability-tests-a)`
+- `feat(orchestrator-observability-tests-b)`
+- `bug(observability-lifecycle-tests)`
+- `feat(worker-observability-tests)`
+- `docs(changelog)`
+
 ## [2026-03-25] - Guardrails de template e alinhamento documental do MVP
 
 ### Added
