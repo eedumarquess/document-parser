@@ -4,6 +4,55 @@ Todas as mudancas relevantes deste repositorio devem ser registradas aqui.
 
 O formato segue uma adaptacao simples de `Keep a Changelog` e usa as tags de contexto dos commits como apoio para rastreabilidade.
 
+## [2026-03-25] - OCR/LLM Extraction MVP no worker
+
+### Added
+
+- Taxonomias canonicas de `ExtractionWarning` e `FallbackReason`, alem dos novos artefatos tecnicos `LLM_PROMPT` e `LLM_RESPONSE`.
+- Tipos internos do contexto de extracao para `PageExtraction`, `FallbackTarget`, `TargetLocator`, classificacao de manuscrito e estado de checkbox.
+- Pipeline real no `document-processing-worker` com etapas nomeadas de renderizacao, OCR, normalizacao, heuristicas, mascaramento, fallback por alvo, consolidacao e `ProcessingOutcome`.
+- Adapters internos deterministas para renderizacao por pagina, OCR e fallback LLM local, com suporte configuravel a providers externos via `OpenRouter` e `HuggingFace`.
+- Cobertura nova de dominio, aplicacao, contrato e golden dataset para o fluxo OCR/LLM do worker.
+
+### Changed
+
+- `DocumentProcessingWorkerModule` passou a usar a pipeline real por padrao, mantendo o adapter simulado apenas para cenarios controlados.
+- `ProcessingOutcomePolicy`, `ProcessingResult` e fechamento de `JobAttempt` passaram a refletir a taxonomia oficial de warnings, `fallbackReason` e os marcadores textuais canonicos do MVP.
+- Os testes do worker e o E2E da API foram alinhados ao marcador textual `[ilegivel]` e aos novos contratos canonicos da extracao.
+
+### Fixed
+
+- Fallbacks de pagina ou documento inteiro nao ocultam warnings de alvos locais quando a recuperacao global realmente substitui o texto base.
+- A consolidacao de checkbox ambiguo nao corrompe mais o marcador original antes da etapa de heuristica.
+- Conteudo ilegivel puro deixa de disparar fallback global indevido quando ainda existe payload OCR utilizavel para classificar o resultado como `PARTIAL`.
+
+### Commit Contexts
+
+- `feat(shared-kernel)`
+- `feat(document-domain)`
+- `feat(worker-extraction-domain)`
+- `feat(worker-extraction-services)`
+- `feat(worker-extraction-adapters)`
+- `feat(worker-llm-providers)`
+- `feat(worker-pipeline)`
+- `bug(worker-policy)`
+- `feat(worker-tests-domain)`
+- `feat(worker-tests-contracts-a)`
+- `feat(worker-tests-contracts-b)`
+- `feat(worker-tests-flow)`
+- `bug(orchestrator-e2e)`
+- `docs(ocr-llm-extraction)`
+
+## [2026-03-25] - Refinamento do DDD de OCR/LLM Extraction
+
+### Changed
+
+- `docs/ddd/03-ocr-llm-extraction.md` foi reestruturado para explicitar fronteiras com `Ingestion` e `Document Processing`, alinhar a extracao ao modelo canonico de `JobAttempt` e `ProcessingOutcome`, formalizar a linguagem ubiqua operacional e documentar o estado atual do worker contra o desenho alvo.
+
+### Commit Contexts
+
+- `docs(ddd)`
+
 ## [2026-03-25] - Document Processing com lifecycle compartilhado, retry por TTL e DLQ
 
 ### Added
