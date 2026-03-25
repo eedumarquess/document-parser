@@ -1,9 +1,0 @@
-export const DOCUMENTS_EXCHANGE = 'documents.x';
-export const DOCUMENTS_PROCESS_QUEUE = 'documents.process.q';
-export const DOCUMENTS_RETRY_QUEUE = 'documents.retry.q';
-export const DOCUMENTS_DLQ_QUEUE = 'documents.dlq.q';
-export const DOCUMENTS_PROCESS_ROUTING_KEY = 'documents.process';
-export const DOCUMENTS_RETRY_ROUTING_KEY = 'documents.retry';
-export const DOCUMENTS_DLQ_ROUTING_KEY = 'documents.dlq';
-export const RETRY_QUEUE_TTL_MS = 10_000;
-export const MAX_ATTEMPTS = 3;
