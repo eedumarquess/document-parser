@@ -34,6 +34,7 @@ describe('In-memory adapter contracts', () => {
       documentId: 'doc-1',
       jobId: 'job-1',
       attemptId: 'attempt-1',
+      traceId: 'trace-1',
       requestedMode: 'STANDARD',
       pipelineVersion: 'git-sha',
       publishedAt: new Date('2026-03-25T12:00:00.000Z').toISOString()
@@ -45,13 +46,14 @@ describe('In-memory adapter contracts', () => {
         documentId: 'doc-1',
         jobId: 'job-1',
         attemptId: 'attempt-1',
+        traceId: 'trace-1',
         requestedMode: 'STANDARD',
         pipelineVersion: 'git-sha',
         publishedAt: '2026-03-25T12:00:00.000Z'
       }
     ]);
     expect(Object.keys(publisher.messages[0]).sort()).toEqual(
-      ['attemptId', 'documentId', 'jobId', 'pipelineVersion', 'publishedAt', 'requestedMode'].sort()
+      ['attemptId', 'documentId', 'jobId', 'pipelineVersion', 'publishedAt', 'requestedMode', 'traceId'].sort()
     );
     expectNoTemplateFields(publisher.messages[0] as Record<string, unknown>);
     expect(received).toEqual(['job-1']);
@@ -65,6 +67,7 @@ describe('In-memory adapter contracts', () => {
         documentId: 'doc-2',
         jobId: 'job-2',
         attemptId: 'attempt-2',
+        traceId: 'trace-2',
         requestedMode: 'STANDARD',
         pipelineVersion: 'git-sha',
         publishedAt: '2026-03-25T12:00:02.000Z'
@@ -78,6 +81,7 @@ describe('In-memory adapter contracts', () => {
           documentId: 'doc-2',
           jobId: 'job-2',
           attemptId: 'attempt-2',
+          traceId: 'trace-2',
           requestedMode: 'STANDARD',
           pipelineVersion: 'git-sha',
           publishedAt: '2026-03-25T12:00:02.000Z'
@@ -86,7 +90,7 @@ describe('In-memory adapter contracts', () => {
       }
     ]);
     expect(Object.keys(publisher.retryMessages[0].message).sort()).toEqual(
-      ['attemptId', 'documentId', 'jobId', 'pipelineVersion', 'publishedAt', 'requestedMode'].sort()
+      ['attemptId', 'documentId', 'jobId', 'pipelineVersion', 'publishedAt', 'requestedMode', 'traceId'].sort()
     );
     expectNoTemplateFields(publisher.retryMessages[0].message as Record<string, unknown>);
   });

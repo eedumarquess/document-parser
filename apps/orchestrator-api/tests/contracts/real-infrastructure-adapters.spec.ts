@@ -5,6 +5,7 @@ import { buildActor } from '@document-parser/testkit';
 import { RabbitMqJobPublisherAdapter } from '../../src/adapters/out/queue/rabbitmq-job-publisher.adapter';
 import {
   MongoAuditRepositoryAdapter,
+  MongoDeadLetterRepositoryAdapter,
   MongoDocumentRepositoryAdapter,
   MongoJobAttemptRepositoryAdapter,
   MongoProcessingJobRepositoryAdapter,
@@ -37,6 +38,7 @@ describeRealInfra('Real infrastructure adapter contracts', () => {
   let jobs: MongoProcessingJobRepositoryAdapter;
   let attempts: MongoJobAttemptRepositoryAdapter;
   let results: MongoProcessingResultRepositoryAdapter;
+  let deadLetters: MongoDeadLetterRepositoryAdapter;
   let audit: MongoAuditRepositoryAdapter;
   let storage: MinioBinaryStorageAdapter;
   let publisher: RabbitMqJobPublisherAdapter;
@@ -66,6 +68,7 @@ describeRealInfra('Real infrastructure adapter contracts', () => {
     jobs = new MongoProcessingJobRepositoryAdapter(mongoProvider, sessionContext);
     attempts = new MongoJobAttemptRepositoryAdapter(mongoProvider, sessionContext);
     results = new MongoProcessingResultRepositoryAdapter(mongoProvider, sessionContext);
+    deadLetters = new MongoDeadLetterRepositoryAdapter(mongoProvider, sessionContext);
     audit = new MongoAuditRepositoryAdapter(mongoProvider, sessionContext);
 
     minioContainer = await new GenericContainer('minio/minio:RELEASE.2024-03-30T09-41-56Z')
@@ -177,7 +180,8 @@ describeRealInfra('Real infrastructure adapter contracts', () => {
         engineUsed: 'OCR',
         totalLatencyMs: 100,
         createdAt: new Date('2026-03-25T12:00:00.000Z'),
-        updatedAt: new Date('2026-03-25T12:00:00.000Z')
+        updatedAt: new Date('2026-03-25T12:00:00.000Z'),
+        retentionUntil: new Date('2026-06-23T12:00:00.000Z')
       });
       await results.save({
         resultId: 'result-newer',
@@ -194,14 +198,34 @@ describeRealInfra('Real infrastructure adapter contracts', () => {
         engineUsed: 'OCR',
         totalLatencyMs: 110,
         createdAt: new Date('2026-03-25T12:05:00.000Z'),
-        updatedAt: new Date('2026-03-25T12:05:00.000Z')
+        updatedAt: new Date('2026-03-25T12:05:00.000Z'),
+        retentionUntil: new Date('2026-06-23T12:05:00.000Z')
       });
       await audit.record({
         eventId: 'audit-1',
         eventType: 'DOCUMENT_ACCEPTED',
+        aggregateType: 'PROCESSING_JOB',
+        aggregateId: 'job-1',
+        traceId: 'trace-1',
         actor: buildActor(),
         metadata: { jobId: 'job-1' },
-        createdAt: now
+        redactedPayload: { jobId: 'job-1' },
+        createdAt: now,
+        retentionUntil: new Date('2026-09-21T12:00:00.000Z')
+      });
+      await deadLetters.save({
+        dlqEventId: 'dlq-1',
+        jobId: 'job-1',
+        attemptId: 'attempt-1',
+        traceId: 'trace-1',
+        queueName,
+        reasonCode: 'DLQ_ERROR',
+        reasonMessage: 'retries exhausted',
+        retryCount: 3,
+        payloadSnapshot: { jobId: 'job-1', attemptId: 'attempt-1' },
+        firstSeenAt: now,
+        lastSeenAt: now,
+        retentionUntil: new Date('2026-09-21T12:00:00.000Z')
       });
     });
 
@@ -226,6 +250,9 @@ describeRealInfra('Real infrastructure adapter contracts', () => {
       status: JobStatus.PARTIAL
     });
     await expect(audit.list()).resolves.toHaveLength(1);
+    await expect(deadLetters.findById('dlq-1')).resolves.toMatchObject({
+      jobId: 'job-1'
+    });
   });
 
   it('rolls back Mongo writes when the unit of work fails', async () => {
@@ -265,6 +292,7 @@ describeRealInfra('Real infrastructure adapter contracts', () => {
 
     expect(collectionNames).toEqual([
       'audit_events',
+      'dead_letter_events',
       'documents',
       'job_attempts',
       'processing_jobs',
@@ -289,11 +317,45 @@ describeRealInfra('Real infrastructure adapter contracts', () => {
     await expect(storage.read(reference)).rejects.toThrow('Stored binary not found');
   });
 
+  it('creates TTL indexes for observable collections', async () => {
+    const database = await mongoProvider.getDatabase();
+
+    const auditIndexes = await database.collection('audit_events').indexes();
+    const resultIndexes = await database.collection('processing_results').indexes();
+    const deadLetterIndexes = await database.collection('dead_letter_events').indexes();
+
+    expect(auditIndexes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: { retentionUntil: 1 },
+          expireAfterSeconds: 0
+        })
+      ])
+    );
+    expect(resultIndexes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: { retentionUntil: 1 },
+          expireAfterSeconds: 0
+        })
+      ])
+    );
+    expect(deadLetterIndexes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: { retentionUntil: 1 },
+          expireAfterSeconds: 0
+        })
+      ])
+    );
+  });
+
   it('publishes the minimal queue contract to RabbitMQ', async () => {
     const payload = {
       documentId: 'doc-1',
       jobId: 'job-1',
       attemptId: 'attempt-1',
+      traceId: 'trace-queue-1',
       requestedMode: 'STANDARD',
       pipelineVersion: 'git-sha',
       publishedAt: '2026-03-25T12:00:00.000Z'
@@ -309,7 +371,7 @@ describeRealInfra('Real infrastructure adapter contracts', () => {
     const parsedPayload = JSON.parse(message ? message.content.toString('utf8') : '{}') as Record<string, unknown>;
     expect(parsedPayload).toEqual(payload);
     expect(Object.keys(parsedPayload).sort()).toEqual(
-      ['attemptId', 'documentId', 'jobId', 'pipelineVersion', 'publishedAt', 'requestedMode'].sort()
+      ['attemptId', 'documentId', 'jobId', 'pipelineVersion', 'publishedAt', 'requestedMode', 'traceId'].sort()
     );
     expectNoTemplateFields(parsedPayload);
 
@@ -322,6 +384,7 @@ describeRealInfra('Real infrastructure adapter contracts', () => {
       documentId: 'doc-retry',
       jobId: 'job-retry',
       attemptId: 'attempt-retry',
+      traceId: 'trace-retry-1',
       requestedMode: 'STANDARD',
       pipelineVersion: 'git-sha',
       publishedAt: '2026-03-25T12:00:02.000Z'
@@ -349,7 +412,7 @@ describeRealInfra('Real infrastructure adapter contracts', () => {
     const parsedPayload = JSON.parse(retriedMessage.content.toString('utf8')) as Record<string, unknown>;
     expect(parsedPayload).toEqual(payload);
     expect(Object.keys(parsedPayload).sort()).toEqual(
-      ['attemptId', 'documentId', 'jobId', 'pipelineVersion', 'publishedAt', 'requestedMode'].sort()
+      ['attemptId', 'documentId', 'jobId', 'pipelineVersion', 'publishedAt', 'requestedMode', 'traceId'].sort()
     );
     expectNoTemplateFields(parsedPayload);
 
@@ -362,6 +425,7 @@ describeRealInfra('Real infrastructure adapter contracts', () => {
       documentId: 'doc-dlq',
       jobId: 'job-dlq',
       attemptId: 'attempt-dlq',
+      traceId: 'trace-dlq-1',
       requestedMode: 'STANDARD',
       pipelineVersion: 'git-sha',
       publishedAt: '2026-03-25T12:00:03.000Z'

@@ -13,6 +13,7 @@ import { OrchestratorApiModule } from '../../src/app.module';
 import { InMemoryJobPublisherAdapter } from '../../src/adapters/out/queue/in-memory-job-publisher.adapter';
 import {
   InMemoryAuditRepository,
+  InMemoryDeadLetterRepository,
   InMemoryDocumentRepository,
   InMemoryJobAttemptRepository,
   InMemoryProcessingJobRepository,
@@ -30,8 +31,10 @@ const expectNoTemplateFields = (payload: Record<string, unknown>) => {
 describe('Document jobs e2e', () => {
   let app: INestApplication;
   let audit: InMemoryAuditRepository;
+  let deadLetters: InMemoryDeadLetterRepository;
   let jobs: InMemoryProcessingJobRepository;
   let attempts: InMemoryJobAttemptRepository;
+  let lastPublishedTraceId: string | undefined;
 
   const waitForJobStatus = async (jobId: string, expectedStatus: string) => {
     for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -57,9 +60,11 @@ describe('Document jobs e2e', () => {
     jobs = new InMemoryProcessingJobRepository();
     attempts = new InMemoryJobAttemptRepository();
     const results = new InMemoryProcessingResultRepository();
+    deadLetters = new InMemoryDeadLetterRepository();
     audit = new InMemoryAuditRepository();
     const publisher = new InMemoryJobPublisherAdapter();
     publisher.subscribe(async (message) => {
+      lastPublishedTraceId = message.traceId;
       const document = await documents.findById(message.documentId);
       const job = await jobs.findById(message.jobId);
       if (document === undefined || job === undefined) {
@@ -93,7 +98,8 @@ describe('Document jobs e2e', () => {
         engineUsed: 'OCR',
         totalLatencyMs: 900,
         createdAt: clock.now(),
-        updatedAt: clock.now()
+        updatedAt: clock.now(),
+        retentionUntil: new Date('2026-06-23T12:00:00.000Z')
       });
     });
 
@@ -107,6 +113,7 @@ describe('Document jobs e2e', () => {
           jobs,
           attempts,
           results,
+          deadLetters,
           audit,
           publisher
         })
@@ -125,12 +132,15 @@ describe('Document jobs e2e', () => {
     const createResponse = await request(app.getHttpServer())
       .post('/v1/parsing/jobs')
       .set('x-role', Role.OWNER)
+      .set('x-trace-id', 'trace-e2e-submit')
       .attach('file', createPdfBuffer(1, 'conteudo extraido'), {
         filename: 'sample.pdf',
         contentType: 'application/pdf'
       });
 
     expect(createResponse.status).toBe(201);
+    expect(createResponse.headers['x-trace-id']).toBe('trace-e2e-submit');
+    expect(lastPublishedTraceId).toBe('trace-e2e-submit');
     expect(createResponse.body.status).toBe('QUEUED');
     expect(Object.keys(createResponse.body).sort()).toEqual(
       ['createdAt', 'documentId', 'jobId', 'outputVersion', 'pipelineVersion', 'requestedMode', 'reusedResult', 'status'].sort()
@@ -140,6 +150,7 @@ describe('Document jobs e2e', () => {
     const statusResponse = await waitForJobStatus(createResponse.body.jobId, 'COMPLETED');
 
     expect(statusResponse.body.status).toBe('COMPLETED');
+    expect(statusResponse.headers['x-trace-id']).toBeDefined();
     expect(Object.keys(statusResponse.body).sort()).toEqual(
       ['createdAt', 'documentId', 'jobId', 'outputVersion', 'pipelineVersion', 'requestedMode', 'reusedResult', 'status'].sort()
     );
@@ -150,6 +161,7 @@ describe('Document jobs e2e', () => {
       .set('x-role', Role.OPERATOR);
 
     expect(resultResponse.status).toBe(200);
+    expect(resultResponse.headers['x-trace-id']).toBeDefined();
     expect(resultResponse.body).toMatchObject({
       jobId: createResponse.body.jobId,
       documentId: createResponse.body.documentId,
@@ -189,6 +201,7 @@ describe('Document jobs e2e', () => {
     const response = await request(app.getHttpServer()).post('/v1/parsing/jobs');
 
     expect(response.status).toBe(400);
+    expect(response.headers['x-trace-id']).toBeDefined();
     expect(response.body).toEqual({
       errorCode: 'VALIDATION_ERROR',
       message: 'file is required'
@@ -201,6 +214,7 @@ describe('Document jobs e2e', () => {
       .set('x-role', Role.OPERATOR);
 
     expect(response.status).toBe(404);
+    expect(response.headers['x-trace-id']).toBeDefined();
     expect(response.body).toEqual({
       errorCode: 'NOT_FOUND',
       message: 'Processing job not found',
@@ -325,6 +339,52 @@ describe('Document jobs e2e', () => {
     expect(reprocessAttempts).toHaveLength(1);
     expect(reprocessAttempts[0]).toMatchObject({
       attemptNumber: 1
+    });
+  });
+
+  it('replays a dead letter into a new queued job and marks the record as replayed', async () => {
+    const createResponse = await request(app.getHttpServer())
+      .post('/v1/parsing/jobs')
+      .set('x-role', Role.OWNER)
+      .attach('file', createPdfBuffer(1, 'replay me'), {
+        filename: 'replay.pdf',
+        contentType: 'application/pdf'
+      });
+
+    await waitForJobStatus(createResponse.body.jobId, 'COMPLETED');
+    const [attempt] = await attempts.listByJobId(createResponse.body.jobId);
+    await deadLetters.save({
+      dlqEventId: 'dlq-replay-1',
+      jobId: createResponse.body.jobId,
+      attemptId: attempt.attemptId,
+      traceId: 'trace-dlq-source',
+      queueName: 'document-processing.requested',
+      reasonCode: 'DLQ_ERROR',
+      reasonMessage: 'retries exhausted',
+      retryCount: 3,
+      payloadSnapshot: {
+        jobId: createResponse.body.jobId,
+        attemptId: attempt.attemptId
+      },
+      firstSeenAt: new Date('2026-03-25T12:00:00.000Z'),
+      lastSeenAt: new Date('2026-03-25T12:00:00.000Z'),
+      retentionUntil: new Date('2026-09-21T12:00:00.000Z')
+    });
+
+    const replayResponse = await request(app.getHttpServer())
+      .post('/v1/parsing/dead-letters/dlq-replay-1/replay')
+      .set('x-role', Role.OWNER)
+      .set('x-trace-id', 'trace-e2e-replay')
+      .send({ reason: 'manual replay' });
+
+    expect(replayResponse.status).toBe(201);
+    expect(replayResponse.headers['x-trace-id']).toBe('trace-e2e-replay');
+    expect(replayResponse.body.jobId).not.toBe(createResponse.body.jobId);
+    expect(lastPublishedTraceId).toBe('trace-e2e-replay');
+
+    await waitForJobStatus(replayResponse.body.jobId, 'COMPLETED');
+    await expect(deadLetters.findById('dlq-replay-1')).resolves.toMatchObject({
+      replayedAt: expect.any(Date)
     });
   });
 });
