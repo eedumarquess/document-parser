@@ -4,6 +4,56 @@ Todas as mudancas relevantes deste repositorio devem ser registradas aqui.
 
 O formato segue uma adaptacao simples de `Keep a Changelog` e usa as tags de contexto dos commits como apoio para rastreabilidade.
 
+## [2026-03-25] - Document Processing com lifecycle compartilhado, retry por TTL e DLQ
+
+### Added
+
+- Novo pacote `document-processing-domain` com modelos canonicos de `ProcessingJob`, `JobAttempt`, `ProcessingResult` e `DeadLetterRecord`.
+- Maquinas de estado puras e servicos compartilhados para lifecycle, classificacao de falha, versionamento tecnico e politica de retry.
+- Novos estados oficiais de tentativa: `PENDING`, `PARTIAL`, `TIMED_OUT` e `MOVED_TO_DLQ`.
+- Topologia RabbitMQ com fila principal, filas de retry por TTL e fila de DLQ derivadas da fila base.
+- `UnitOfWorkPort` e implementacoes `in-memory` e `Mongo` no worker.
+- Nova cobertura de dominio para lifecycle de job e attempt, alem de contract tests de retry e DLQ no publisher.
+
+### Changed
+
+- `SubmitDocumentUseCase` e `ReprocessDocumentUseCase` agora persistem o primeiro `JobAttempt` como `PENDING` antes do publish e so promovem para `QUEUED` apos confirmacao.
+- `ProcessJobMessageUseCase` passou a usar o lifecycle compartilhado para `PROCESSING`, `COMPLETED`, `PARTIAL`, retry e `MOVED_TO_DLQ`.
+- API e worker deixaram de manter `ProcessingJobRecord` e `JobAttemptRecord` em duplicidade local; ambos consomem o mesmo shape do pacote compartilhado.
+- Os adapters de fila passaram a expor `publishRequested` e `publishRetry`, escondendo nomes de filas dos casos de uso.
+
+### Fixed
+
+- Falha de publicacao inicial em fila agora preserva `JobAttempt` em `PENDING` em vez de perder o `attemptId`.
+- Reuso de resultado compativel foi alinhado ao novo modelo, no qual `ProcessingResult` terminal so existe para `COMPLETED` e `PARTIAL`.
+- Falha ao agendar retry no worker agora fecha o job em `FAILED`, registra `DeadLetterRecord` e encaminha a mensagem para a DLQ operacional.
+
+### Technical Notes
+
+- O payload minimo da fila permaneceu inalterado: `documentId`, `jobId`, `attemptId`, `requestedMode`, `pipelineVersion` e `publishedAt`.
+- As filas derivadas seguem o padrao `${main}.retry.1`, `${main}.retry.2`, `${main}.retry.3` e `${main}.dlq`.
+- Os testes de infraestrutura real continuam protegidos por `RUN_REAL_INFRA_TESTS=true`.
+
+### Commit Contexts
+
+- `feat(shared-kernel)`
+- `feat(document-domain-base)`
+- `feat(document-domain-lifecycle)`
+- `feat(document-domain-versioning)`
+- `feat(workspace-domain)`
+- `feat(testkit)`
+- `feat(orchestrator-setup)`
+- `feat(orchestrator-contracts)`
+- `feat(orchestrator-usecases)`
+- `bug(orchestrator-compatibility)`
+- `feat(orchestrator-contract-tests)`
+- `feat(worker-setup)`
+- `feat(worker-contracts)`
+- `feat(worker-infra)`
+- `feat(worker-runtime)`
+- `feat(worker-lifecycle)`
+- `docs(changelog)`
+
 ## [2026-03-25] - Ingestion MVP com infraestrutura real e compatibilidade por chave
 
 ### Added
