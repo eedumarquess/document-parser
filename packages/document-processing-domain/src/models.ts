@@ -83,12 +83,14 @@ export type ProcessingResultRecord = {
   sourceJobId?: string;
   createdAt: Date;
   updatedAt: Date;
+  retentionUntil: Date;
 };
 
 export type DeadLetterRecord = {
   dlqEventId: string;
   jobId: string;
   attemptId: string;
+  traceId: string;
   queueName: string;
   reasonCode: string;
   reasonMessage: string;
@@ -96,4 +98,6 @@ export type DeadLetterRecord = {
   payloadSnapshot: Record<string, unknown>;
   firstSeenAt: Date;
   lastSeenAt: Date;
+  replayedAt?: Date;
+  retentionUntil: Date;
 };

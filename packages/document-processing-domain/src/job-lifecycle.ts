@@ -329,11 +329,13 @@ export function failAttempt(input: {
 export function moveFailedAttemptToDeadLetter(input: {
   job: ProcessingJobRecord;
   attempt: JobAttemptRecord;
+  traceId: string;
   queueName: string;
   reasonCode: ErrorCode.DLQ_ERROR | ErrorCode.FATAL_FAILURE | ErrorCode.TIMEOUT;
   reasonMessage: string;
   payloadSnapshot: Record<string, unknown>;
   deadLetterEventId: string;
+  retentionUntil: Date;
   now: Date;
 }): { job: ProcessingJobRecord; attempt: JobAttemptRecord; deadLetter: DeadLetterRecord } {
   ensureAttemptStatus(
@@ -366,13 +368,15 @@ export function moveFailedAttemptToDeadLetter(input: {
       dlqEventId: input.deadLetterEventId,
       jobId: input.job.jobId,
       attemptId: input.attempt.attemptId,
+      traceId: input.traceId,
       queueName: input.queueName,
       reasonCode: input.reasonCode,
       reasonMessage: input.reasonMessage,
       retryCount: input.attempt.attemptNumber,
       payloadSnapshot: input.payloadSnapshot,
       firstSeenAt: input.now,
-      lastSeenAt: input.now
+      lastSeenAt: input.now,
+      retentionUntil: input.retentionUntil
     }
   };
 }
