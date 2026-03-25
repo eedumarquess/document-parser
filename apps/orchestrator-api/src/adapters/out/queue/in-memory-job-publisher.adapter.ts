@@ -9,7 +9,11 @@ export class InMemoryJobPublisherAdapter implements JobPublisherPort {
 
   public async publish(message: ProcessingJobRequestedMessage): Promise<void> {
     this.messages.push(message);
-    await Promise.all(this.subscribers.map(async (subscriber) => subscriber(message)));
+    for (const subscriber of this.subscribers) {
+      queueMicrotask(() => {
+        void subscriber(message);
+      });
+    }
   }
 
   public subscribe(subscriber: (message: ProcessingJobRequestedMessage) => Promise<void>): void {

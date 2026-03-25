@@ -17,6 +17,22 @@ import { InMemoryBinaryStorageAdapter } from '../../src/adapters/out/storage/in-
 describe('Document jobs e2e', () => {
   let app: INestApplication;
 
+  const waitForJobStatus = async (jobId: string, expectedStatus: string) => {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const response = await request(app.getHttpServer())
+        .get(`/v1/parsing/jobs/${jobId}`)
+        .set('x-role', Role.OWNER);
+
+      if (response.body.status === expectedStatus) {
+        return response;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+
+    throw new Error(`Job ${jobId} did not reach status ${expectedStatus}`);
+  };
+
   beforeAll(async () => {
     const clock = new FixedClock();
     const idGenerator = new IncrementalIdGenerator();
@@ -50,6 +66,7 @@ describe('Document jobs e2e', () => {
         resultId: idGenerator.next('result'),
         jobId: job.jobId,
         documentId: job.documentId,
+        compatibilityKey: `${document.hash}:${job.requestedMode}:${DEFAULT_PIPELINE_VERSION}:${DEFAULT_OUTPUT_VERSION}`,
         status,
         requestedMode: job.requestedMode,
         pipelineVersion: DEFAULT_PIPELINE_VERSION,
@@ -100,9 +117,7 @@ describe('Document jobs e2e', () => {
     expect(createResponse.status).toBe(201);
     expect(createResponse.body.status).toBe('QUEUED');
 
-    const statusResponse = await request(app.getHttpServer())
-      .get(`/v1/parsing/jobs/${createResponse.body.jobId}`)
-      .set('x-role', Role.OWNER);
+    const statusResponse = await waitForJobStatus(createResponse.body.jobId, 'COMPLETED');
 
     expect(statusResponse.body.status).toBe('COMPLETED');
 
@@ -130,6 +145,8 @@ describe('Document jobs e2e', () => {
         filename: 'partial.pdf',
         contentType: 'application/pdf'
       });
+
+    await waitForJobStatus(createResponse.body.jobId, 'PARTIAL');
 
     const resultResponse = await request(app.getHttpServer())
       .get(`/v1/parsing/jobs/${createResponse.body.jobId}/result`)

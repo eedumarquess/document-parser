@@ -31,6 +31,7 @@ describe('In-memory adapter contracts', () => {
       pipelineVersion: 'git-sha',
       publishedAt: new Date('2026-03-25T12:00:00.000Z').toISOString()
     });
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(publisher.messages).toEqual([
       {
@@ -58,4 +59,3 @@ describe('In-memory adapter contracts', () => {
     ).resolves.toBe(2);
   });
 });
-
