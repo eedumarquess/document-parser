@@ -1,6 +1,11 @@
-import type { AuditActor, ProcessingJobRequestedMessage } from '@document-parser/shared-kernel';
+import type {
+  AuditActor,
+  LogRecord,
+  ProcessingJobRequestedMessage
+} from '@document-parser/shared-kernel';
 import type {
   AuditEventRecord,
+  DeadLetterRecord,
   DocumentRecord,
   JobAttemptRecord,
   ProcessingJobRecord,
@@ -59,6 +64,12 @@ export interface ProcessingResultRepositoryPort {
   save(result: ProcessingResultRecord): Promise<void>;
 }
 
+export interface DeadLetterRepositoryPort {
+  save(record: DeadLetterRecord): Promise<void>;
+  findById(dlqEventId: string): Promise<DeadLetterRecord | undefined>;
+  list(): Promise<DeadLetterRecord[]>;
+}
+
 export interface CompatibleResultLookupPort {
   findByCompatibilityKey(input: {
     hash: string;
@@ -80,6 +91,36 @@ export interface JobPublisherPort {
 export interface AuditPort {
   record(event: AuditEventRecord): Promise<void>;
   list(): Promise<AuditEventRecord[]>;
+}
+
+export interface LoggingPort {
+  log(entry: LogRecord): Promise<void>;
+}
+
+export interface MetricsPort {
+  increment(input: {
+    name: string;
+    value?: number;
+    traceId?: string;
+    tags?: Record<string, string>;
+  }): Promise<void>;
+  recordHistogram(input: {
+    name: string;
+    value: number;
+    traceId?: string;
+    tags?: Record<string, string>;
+  }): Promise<void>;
+}
+
+export interface TracingPort {
+  runInSpan<T>(
+    input: {
+      traceId: string;
+      spanName: string;
+      attributes?: Record<string, unknown>;
+    },
+    work: () => Promise<T>
+  ): Promise<T>;
 }
 
 export interface AuthorizationPort {
