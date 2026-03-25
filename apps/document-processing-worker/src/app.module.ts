@@ -1,4 +1,11 @@
 import { DynamicModule, Module, type Provider } from '@nestjs/common';
+import {
+  JsonConsoleLoggingAdapter,
+  JsonConsoleMetricsAdapter,
+  JsonConsoleTracingAdapter,
+  RedactionPolicyService,
+  RetentionPolicyService
+} from '@document-parser/shared-kernel';
 import { ProcessingJobConsumer } from './adapters/in/queue/processing-job.consumer';
 import { RandomIdGeneratorAdapter } from './adapters/out/clock/random-id-generator.adapter';
 import { SystemClockAdapter } from './adapters/out/clock/system-clock.adapter';
@@ -24,9 +31,12 @@ import type {
   IdGeneratorPort,
   JobAttemptRepositoryPort,
   JobPublisherPort,
+  LoggingPort,
+  MetricsPort,
   PageArtifactRepositoryPort,
   ProcessingJobRepositoryPort,
   ProcessingResultRepositoryPort,
+  TracingPort,
   UnitOfWorkPort
 } from './contracts/ports';
 import { TOKENS } from './contracts/tokens';
@@ -49,6 +59,9 @@ export type WorkerProviderOverrides = Partial<{
   artifacts: PageArtifactRepositoryPort;
   deadLetters: DeadLetterRepositoryPort;
   audit: AuditPort;
+  logging: LoggingPort;
+  metrics: MetricsPort;
+  tracing: TracingPort;
   publisher: JobPublisherPort;
   unitOfWork: UnitOfWorkPort;
   pageRenderer: PageRendererPort;
@@ -86,6 +99,9 @@ export class DocumentProcessingWorkerModule {
         useValue: overrides.deadLetters ?? new InMemoryDeadLetterRepository()
       },
       { provide: TOKENS.AUDIT, useValue: overrides.audit ?? new InMemoryAuditRepository() },
+      { provide: TOKENS.LOGGING, useValue: overrides.logging ?? new JsonConsoleLoggingAdapter() },
+      { provide: TOKENS.METRICS, useValue: overrides.metrics ?? new JsonConsoleMetricsAdapter() },
+      { provide: TOKENS.TRACING, useValue: overrides.tracing ?? new JsonConsoleTracingAdapter() },
       {
         provide: TOKENS.JOB_PUBLISHER,
         useValue:
@@ -102,6 +118,8 @@ export class DocumentProcessingWorkerModule {
       { provide: TOKENS.UNIT_OF_WORK, useValue: overrides.unitOfWork ?? new InMemoryUnitOfWork() },
       ProcessingOutcomePolicy,
       RetryPolicyService,
+      RetentionPolicyService,
+      RedactionPolicyService,
       {
         provide: TOKENS.EXTRACTION_PIPELINE,
         useFactory: (policy: ProcessingOutcomePolicy) =>

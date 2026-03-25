@@ -12,6 +12,7 @@ export class ProcessingResultEntity {
     pipelineVersion: string;
     outputVersion: string;
     outcome: ProcessingOutcome;
+    retentionUntil: Date;
     now: Date;
   }): ProcessingResultRecord {
     return {
@@ -37,7 +38,8 @@ export class ProcessingResultEntity {
       modelVersion: input.outcome.modelVersion,
       normalizationVersion: input.outcome.normalizationVersion,
       createdAt: input.now,
-      updatedAt: input.now
+      updatedAt: input.now,
+      retentionUntil: input.retentionUntil
     };
   }
 }

@@ -17,12 +17,12 @@ import {
   ErrorCode,
   FatalFailureError,
   JobStatus,
+  RedactionPolicyService,
+  RetentionPolicyService,
   Role,
   type AuditActor,
   type ProcessingJobRequestedMessage
 } from '@document-parser/shared-kernel';
-import { ProcessingResultEntity } from '../../domain/entities/processing-result.entity';
-import { RetryPolicyService } from '../../domain/policies/retry-policy.service';
 import type {
   AuditPort,
   BinaryStoragePort,
@@ -33,12 +33,17 @@ import type {
   IdGeneratorPort,
   JobAttemptRepositoryPort,
   JobPublisherPort,
+  LoggingPort,
+  MetricsPort,
   PageArtifactRepositoryPort,
   ProcessingJobRepositoryPort,
   ProcessingResultRepositoryPort,
+  TracingPort,
   UnitOfWorkPort
 } from '../../contracts/ports';
 import { TOKENS } from '../../contracts/tokens';
+import { ProcessingResultEntity } from '../../domain/entities/processing-result.entity';
+import { RetryPolicyService } from '../../domain/policies/retry-policy.service';
 import type { ProcessJobMessageCommand } from '../commands/process-job-message.command';
 
 class MessageMovedToDeadLetterError extends Error {
@@ -66,102 +71,189 @@ export class ProcessJobMessageUseCase {
     @Inject(TOKENS.PAGE_ARTIFACT_REPOSITORY) private readonly artifacts: PageArtifactRepositoryPort,
     @Inject(TOKENS.DEAD_LETTER_REPOSITORY) private readonly deadLetters: DeadLetterRepositoryPort,
     @Inject(TOKENS.AUDIT) private readonly audit: AuditPort,
+    @Inject(TOKENS.LOGGING) private readonly logging: LoggingPort,
+    @Inject(TOKENS.METRICS) private readonly metrics: MetricsPort,
+    @Inject(TOKENS.TRACING) private readonly tracing: TracingPort,
     @Inject(TOKENS.JOB_PUBLISHER) private readonly publisher: JobPublisherPort,
     @Inject(TOKENS.UNIT_OF_WORK) private readonly unitOfWork: UnitOfWorkPort,
     @Inject(TOKENS.EXTRACTION_PIPELINE) private readonly extraction: ExtractionPipelinePort,
-    private readonly retryPolicy: RetryPolicyService
+    private readonly retryPolicy: RetryPolicyService,
+    private readonly retentionPolicy: RetentionPolicyService,
+    private readonly redactionPolicy: RedactionPolicyService
   ) {}
 
   public async execute(command: ProcessJobMessageCommand): Promise<void> {
     const { message } = command;
-    const now = this.clock.now();
-    const job = await this.jobs.findById(message.jobId);
-    const document = await this.documents.findById(message.documentId);
-    const attempt = await this.attempts.findById(message.attemptId);
+    const startedAt = Date.now();
 
-    if (job === undefined || document === undefined || attempt === undefined) {
-      throw new FatalFailureError('Worker context is incomplete', {
-        jobId: message.jobId,
-        documentId: message.documentId,
-        attemptId: message.attemptId
-      });
-    }
+    return this.tracing.runInSpan(
+      {
+        traceId: message.traceId,
+        spanName: 'worker.process_job_message',
+        attributes: {
+          jobId: message.jobId,
+          attemptId: message.attemptId
+        }
+      },
+      async () => {
+        const now = this.clock.now();
+        const job = await this.jobs.findById(message.jobId);
+        const document = await this.documents.findById(message.documentId);
+        const attempt = await this.attempts.findById(message.attemptId);
 
-    const started = startPendingAttempt({
-      job,
-      attempt,
-      now
-    });
+        if (job === undefined || document === undefined || attempt === undefined) {
+          throw new FatalFailureError('Worker context is incomplete', {
+            jobId: message.jobId,
+            documentId: message.documentId,
+            attemptId: message.attemptId
+          });
+        }
 
-    await this.unitOfWork.runInTransaction(async () => {
-      await this.jobs.save(started.job);
-      await this.attempts.save(started.attempt);
-    });
+        const started = startPendingAttempt({
+          job,
+          attempt,
+          now
+        });
 
-    try {
-      const original = await this.storage.read(document.storageReference);
-      const outcome = await this.extraction.extract({
-        actor: job.requestedBy,
-        document,
-        job: started.job,
-        attempt: started.attempt,
-        original
-      });
+        await this.unitOfWork.runInTransaction(async () => {
+          await this.jobs.save(started.job);
+          await this.attempts.save(started.attempt);
+        });
 
-      const completed = completeAttemptWithOutcome({
-        job: started.job,
-        attempt: started.attempt,
-        outcome,
-        now
-      });
+        try {
+          const original = await this.storage.read(document.storageReference);
+          const outcome = await this.extraction.extract({
+            actor: job.requestedBy,
+            document,
+            job: started.job,
+            attempt: started.attempt,
+            original
+          });
 
-      await this.unitOfWork.runInTransaction(async () => {
-        await this.artifacts.saveMany(
-          outcome.artifacts.map((artifact) => ({
-            ...artifact,
-            documentId: document.documentId,
-            jobId: job.jobId,
-            createdAt: now
-          }))
-        );
-
-        await this.results.save(
-          ProcessingResultEntity.create({
-            resultId: this.idGenerator.next('result'),
-            jobId: job.jobId,
-            documentId: document.documentId,
-            hash: document.hash,
-            requestedMode: job.requestedMode,
-            pipelineVersion: job.pipelineVersion,
-            outputVersion: job.outputVersion,
+          const completed = completeAttemptWithOutcome({
+            job: started.job,
+            attempt: started.attempt,
             outcome,
             now
-          })
-        );
+          });
 
-        await this.attempts.save(completed.attempt);
-        await this.jobs.save(completed.job);
-        await this.audit.record({
-          eventId: this.idGenerator.next('audit'),
-          eventType: 'PROCESSING_COMPLETED',
-          actor: this.systemActor,
-          metadata: {
-            jobId: job.jobId,
-            attemptId: attempt.attemptId,
-            status: outcome.status
-          },
-          createdAt: now
-        });
-      });
-    } catch (error) {
-      await this.handleFailure({
-        error,
-        message,
-        job: started.job,
-        attempt: started.attempt,
-        now
-      });
-    }
+          await this.unitOfWork.runInTransaction(async () => {
+            await this.artifacts.saveMany(
+              outcome.artifacts.map((artifact) => ({
+                ...artifact,
+                documentId: document.documentId,
+                jobId: job.jobId,
+                createdAt: now,
+                retentionUntil: this.retentionPolicy.calculatePageArtifactRetentionUntil({
+                  artifactType: artifact.artifactType,
+                  now
+                })
+              }))
+            );
+
+            await this.results.save(
+              ProcessingResultEntity.create({
+                resultId: this.idGenerator.next('result'),
+                jobId: job.jobId,
+                documentId: document.documentId,
+                hash: document.hash,
+                requestedMode: job.requestedMode,
+                pipelineVersion: job.pipelineVersion,
+                outputVersion: job.outputVersion,
+                outcome,
+                retentionUntil: this.retentionPolicy.calculateProcessingResultRetentionUntil(now),
+                now
+              })
+            );
+
+            await this.attempts.save(completed.attempt);
+            await this.jobs.save(completed.job);
+            await this.recordAuditEvent({
+              eventType: 'PROCESSING_COMPLETED',
+              aggregateType: 'JOB_ATTEMPT',
+              aggregateId: completed.attempt.attemptId,
+              traceId: message.traceId,
+              metadata: {
+                jobId: job.jobId,
+                attemptId: attempt.attemptId,
+                status: outcome.status
+              },
+              createdAt: now
+            });
+          });
+
+          await this.logging.log({
+            level: 'info',
+            message: 'Processing completed successfully',
+            context: 'ProcessJobMessageUseCase',
+            traceId: message.traceId,
+            data: this.redactionPolicy.redact({
+              jobId: job.jobId,
+              attemptId: attempt.attemptId,
+              status: outcome.status
+            }) as Record<string, unknown>,
+            recordedAt: now
+          });
+          await this.metrics.increment({
+            name: 'worker.process_job_message.succeeded',
+            traceId: message.traceId
+          });
+        } catch (error) {
+          try {
+            const recovery = await this.handleFailure({
+              error,
+              message,
+              job: started.job,
+              attempt: started.attempt,
+              now
+            });
+
+            if (recovery === 'retry_scheduled') {
+              await this.logging.log({
+                level: 'warn',
+                message: 'Processing failed and retry was scheduled',
+                context: 'ProcessJobMessageUseCase',
+                traceId: message.traceId,
+                data: this.redactionPolicy.redact({
+                  jobId: started.job.jobId,
+                  attemptId: started.attempt.attemptId
+                }) as Record<string, unknown>,
+                recordedAt: this.clock.now()
+              });
+              await this.metrics.increment({
+                name: 'worker.process_job_message.retry_scheduled',
+                traceId: message.traceId
+              });
+              return;
+            }
+          } catch (handledError) {
+            await this.metrics.increment({
+              name: 'worker.process_job_message.failed',
+              traceId: message.traceId
+            });
+            await this.logging.log({
+              level: 'error',
+              message: 'Processing moved to dead letter',
+              context: 'ProcessJobMessageUseCase',
+              traceId: message.traceId,
+              data: this.redactionPolicy.redact({
+                jobId: started.job.jobId,
+                attemptId: started.attempt.attemptId,
+                errorMessage: handledError instanceof Error ? handledError.message : 'Unexpected failure'
+              }) as Record<string, unknown>,
+              recordedAt: this.clock.now()
+            });
+            throw handledError;
+          }
+        } finally {
+          await this.metrics.recordHistogram({
+            name: 'worker.process_job_message.duration_ms',
+            value: Date.now() - startedAt,
+            traceId: message.traceId
+          });
+        }
+      }
+    );
   }
 
   private async handleFailure(input: {
@@ -170,7 +262,7 @@ export class ProcessJobMessageUseCase {
     job: ProcessingJobRecord;
     attempt: JobAttemptRecord;
     now: Date;
-  }): Promise<void> {
+  }): Promise<'retry_scheduled'> {
     const classification = classifyAttemptFailure(input.error);
     const failedAttempt = failAttempt({
       attempt: input.attempt,
@@ -203,6 +295,7 @@ export class ProcessJobMessageUseCase {
         await this.publisher.publishRetry(retryMessage, input.attempt.attemptNumber);
       } catch (publishError) {
         await this.persistDeadLetter({
+          traceId: input.message.traceId,
           job: recordJobError({
             job: input.job,
             errorCode: ErrorCode.DLQ_ERROR,
@@ -243,10 +336,11 @@ export class ProcessJobMessageUseCase {
         await this.attempts.save(failedAttempt);
         await this.attempts.save(queuedAttempt);
         await this.jobs.save(queuedJob);
-        await this.audit.record({
-          eventId: this.idGenerator.next('audit'),
+        await this.recordAuditEvent({
           eventType: 'PROCESSING_RETRY_SCHEDULED',
-          actor: this.systemActor,
+          aggregateType: 'JOB_ATTEMPT',
+          aggregateId: queuedAttempt.attemptId,
+          traceId: input.message.traceId,
           metadata: {
             jobId: input.job.jobId,
             failedAttemptId: input.attempt.attemptId,
@@ -256,10 +350,11 @@ export class ProcessJobMessageUseCase {
           createdAt: input.now
         });
       });
-      return;
+      return 'retry_scheduled';
     }
 
     await this.persistDeadLetter({
+      traceId: input.message.traceId,
       job: input.job,
       attempt: failedAttempt,
       reasonCode: decision.reasonCode,
@@ -276,6 +371,7 @@ export class ProcessJobMessageUseCase {
   }
 
   private async persistDeadLetter(input: {
+    traceId: string;
     job: ProcessingJobRecord;
     attempt: JobAttemptRecord;
     reasonCode: ErrorCode.DLQ_ERROR | ErrorCode.FATAL_FAILURE | ErrorCode.TIMEOUT;
@@ -287,11 +383,13 @@ export class ProcessJobMessageUseCase {
     const moved = moveFailedAttemptToDeadLetter({
       job: input.job,
       attempt: input.attempt,
+      traceId: input.traceId,
       queueName: input.job.queueName,
       reasonCode: input.reasonCode,
       reasonMessage: input.reasonMessage,
-      payloadSnapshot: input.payloadSnapshot,
+      payloadSnapshot: this.redactionPolicy.redact(input.payloadSnapshot) as Record<string, unknown>,
       deadLetterEventId: this.idGenerator.next('dlq'),
+      retentionUntil: this.retentionPolicy.calculateDeadLetterRetentionUntil(input.now),
       now: input.now
     });
 
@@ -302,10 +400,11 @@ export class ProcessJobMessageUseCase {
       await this.jobs.save(moved.job);
       await this.attempts.save(moved.attempt);
       await this.deadLetters.save(moved.deadLetter);
-      await this.audit.record({
-        eventId: this.idGenerator.next('audit'),
+      await this.recordAuditEvent({
         eventType: 'PROCESSING_FAILED',
-        actor: this.systemActor,
+        aggregateType: 'JOB_ATTEMPT',
+        aggregateId: moved.attempt.attemptId,
+        traceId: input.traceId,
         metadata: {
           jobId: moved.job.jobId,
           attemptId: moved.attempt.attemptId,
@@ -314,6 +413,33 @@ export class ProcessJobMessageUseCase {
         },
         createdAt: input.now
       });
+    });
+  }
+
+  private async recordAuditEvent(input: {
+    eventType: string;
+    aggregateType?: string;
+    aggregateId?: string;
+    traceId: string;
+    metadata?: Record<string, unknown>;
+    redactedPayload?: Record<string, unknown>;
+    createdAt: Date;
+  }): Promise<void> {
+    await this.audit.record({
+      eventId: this.idGenerator.next('audit'),
+      eventType: input.eventType,
+      aggregateType: input.aggregateType,
+      aggregateId: input.aggregateId,
+      traceId: input.traceId,
+      actor: this.systemActor,
+      metadata: input.metadata,
+      redactedPayload:
+        input.redactedPayload ??
+        (input.metadata === undefined
+          ? undefined
+          : (this.redactionPolicy.redact(input.metadata) as Record<string, unknown>)),
+      createdAt: input.createdAt,
+      retentionUntil: this.retentionPolicy.calculateAuditRetentionUntil(input.createdAt)
     });
   }
 }
