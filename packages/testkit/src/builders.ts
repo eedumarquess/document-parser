@@ -35,6 +35,7 @@ export const buildJobMessage = (
   documentId: overrides.documentId ?? 'doc-1',
   jobId: overrides.jobId ?? 'job-1',
   attemptId: overrides.attemptId ?? 'attempt-1',
+  traceId: overrides.traceId ?? 'trace-1',
   requestedMode: overrides.requestedMode ?? 'STANDARD',
   pipelineVersion: overrides.pipelineVersion ?? DEFAULT_PIPELINE_VERSION,
   publishedAt: overrides.publishedAt ?? new Date('2026-03-25T12:00:00.000Z').toISOString()
@@ -50,4 +51,3 @@ export const buildResultSummary = (overrides: Partial<Record<string, unknown>> =
   warnings: overrides.warnings ?? [],
   payload: overrides.payload ?? 'texto consolidado'
 });
-

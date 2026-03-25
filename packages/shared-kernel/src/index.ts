@@ -1,5 +1,7 @@
 export * from './constants';
 export * from './enums';
 export * from './errors';
+export * from './observability';
+export * from './redaction-policy.service';
+export * from './retention-policy.service';
 export * from './types';
-

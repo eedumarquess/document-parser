@@ -18,6 +18,7 @@ export type ProcessingJobRequestedMessage = {
   documentId: string;
   jobId: string;
   attemptId: string;
+  traceId: string;
   requestedMode: string;
   pipelineVersion: string;
   publishedAt: string;
