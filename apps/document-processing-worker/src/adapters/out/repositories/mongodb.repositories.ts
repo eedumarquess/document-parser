@@ -191,7 +191,8 @@ export class MongoProcessingResultRepositoryAdapter
       await collection.createIndexes([
         { key: { resultId: 1 }, unique: true },
         { key: { jobId: 1 } },
-        { key: { compatibilityKey: 1, createdAt: -1 } }
+        { key: { compatibilityKey: 1, createdAt: -1 } },
+        { key: { retentionUntil: 1 }, expireAfterSeconds: 0 }
       ]);
       this.indexesEnsured = true;
     }
@@ -239,7 +240,8 @@ export class MongoPageArtifactRepositoryAdapter
       await collection.createIndexes([
         { key: { artifactId: 1 }, unique: true },
         { key: { documentId: 1 } },
-        { key: { jobId: 1 } }
+        { key: { jobId: 1 } },
+        { key: { retentionUntil: 1 }, expireAfterSeconds: 0 }
       ]);
       this.indexesEnsured = true;
     }
@@ -271,6 +273,12 @@ export class MongoDeadLetterRepositoryAdapter
       .toArray();
   }
 
+  public async findById(dlqEventId: string): Promise<DeadLetterRecord | undefined> {
+    const collection = await this.getCollection();
+    const record = await collection.findOne({ dlqEventId }, { session: this.getSession() });
+    return record === null ? undefined : record;
+  }
+
   private async getCollection(): Promise<Collection<DeadLetterRecord>> {
     const database = await this.provider.getDatabase();
     const collection = database.collection<DeadLetterRecord>('dead_letter_events');
@@ -278,7 +286,9 @@ export class MongoDeadLetterRepositoryAdapter
       await collection.createIndexes([
         { key: { dlqEventId: 1 }, unique: true },
         { key: { jobId: 1 } },
-        { key: { reasonCode: 1 } }
+        { key: { reasonCode: 1 } },
+        { key: { traceId: 1 } },
+        { key: { retentionUntil: 1 }, expireAfterSeconds: 0 }
       ]);
       this.indexesEnsured = true;
     }
@@ -313,7 +323,10 @@ export class MongoAuditRepositoryAdapter extends MongoRepositoryBase implements 
     if (!this.indexesEnsured) {
       await collection.createIndexes([
         { key: { eventId: 1 }, unique: true },
-        { key: { eventType: 1 } }
+        { key: { eventType: 1 } },
+        { key: { aggregateType: 1, aggregateId: 1 } },
+        { key: { traceId: 1 } },
+        { key: { retentionUntil: 1 }, expireAfterSeconds: 0 }
       ]);
       this.indexesEnsured = true;
     }
