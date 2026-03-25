@@ -54,7 +54,7 @@ describe('OCR/LLM extraction golden dataset', () => {
       name: 'handwriting fallback',
       original: 'Consulta: [[HANDWRITING:Dor ha 2 dias]]',
       expectedStatus: JobStatus.COMPLETED,
-      expectedPayload: 'Consulta: [manuscrito] Dor ha * dias',
+      expectedPayload: 'Consulta: [manuscrito] Dor ha 2 dias',
       expectedFallbackReason: FallbackReason.HANDWRITING_DETECTED
     },
     {
