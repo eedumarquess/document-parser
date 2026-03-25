@@ -1,0 +1,30 @@
+{
+  "name": "document-parser",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.6.3",
+  "scripts": {
+    "build": "tsc -b packages/shared-kernel/tsconfig.json packages/testkit/tsconfig.json apps/orchestrator-api/tsconfig.json apps/document-processing-worker/tsconfig.json --force",
+    "lint": "eslint .",
+    "typecheck": "tsc -b packages/shared-kernel/tsconfig.json packages/testkit/tsconfig.json apps/orchestrator-api/tsconfig.json apps/document-processing-worker/tsconfig.json --force --pretty false",
+    "test": "corepack pnpm run test:domain && corepack pnpm run test:application && corepack pnpm run test:contracts && corepack pnpm run test:e2e",
+    "test:domain": "jest --config jest.workspace.config.cjs --selectProjects orchestrator-domain worker-domain",
+    "test:application": "jest --config jest.workspace.config.cjs --selectProjects orchestrator-application worker-application",
+    "test:contracts": "jest --config jest.workspace.config.cjs --selectProjects orchestrator-contracts worker-contracts",
+    "test:e2e": "jest --config jest.workspace.config.cjs --selectProjects orchestrator-e2e worker-e2e"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.23.0",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.13.14",
+    "@types/supertest": "^6.0.3",
+    "eslint": "^9.23.0",
+    "jest": "^29.7.0",
+    "supertest": "^7.1.0",
+    "testcontainers": "^10.24.1",
+    "ts-jest": "^29.2.6",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.2",
+    "typescript-eslint": "^8.28.0"
+  }
+}
