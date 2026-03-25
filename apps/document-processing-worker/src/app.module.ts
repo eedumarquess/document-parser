@@ -2,7 +2,7 @@ import { DynamicModule, Module, type Provider } from '@nestjs/common';
 import { ProcessingJobConsumer } from './adapters/in/queue/processing-job.consumer';
 import { RandomIdGeneratorAdapter } from './adapters/out/clock/random-id-generator.adapter';
 import { SystemClockAdapter } from './adapters/out/clock/system-clock.adapter';
-import { SimulatedDocumentExtractionAdapter } from './adapters/out/extraction/simulated-document-extraction.adapter';
+import { createDefaultExtractionPipeline } from './adapters/out/extraction/default-extraction.factory';
 import {
   InMemoryAuditRepository,
   InMemoryDeadLetterRepository,
@@ -30,6 +30,11 @@ import type {
   UnitOfWorkPort
 } from './contracts/ports';
 import { TOKENS } from './contracts/tokens';
+import type {
+  LlmExtractionPort,
+  OcrEnginePort,
+  PageRendererPort
+} from './domain/extraction/extraction-ports';
 import { ProcessingOutcomePolicy } from './domain/policies/processing-outcome.policy';
 import { RetryPolicyService } from './domain/policies/retry-policy.service';
 
@@ -46,6 +51,9 @@ export type WorkerProviderOverrides = Partial<{
   audit: AuditPort;
   publisher: JobPublisherPort;
   unitOfWork: UnitOfWorkPort;
+  pageRenderer: PageRendererPort;
+  ocrEngine: OcrEnginePort;
+  llmExtraction: LlmExtractionPort;
   extraction: ExtractionPipelinePort;
 }>;
 
@@ -97,7 +105,8 @@ export class DocumentProcessingWorkerModule {
       {
         provide: TOKENS.EXTRACTION_PIPELINE,
         useFactory: (policy: ProcessingOutcomePolicy) =>
-          overrides.extraction ?? new SimulatedDocumentExtractionAdapter(policy),
+          overrides.extraction ??
+          createDefaultExtractionPipeline(policy, overrides),
         inject: [ProcessingOutcomePolicy]
       },
       ProcessJobMessageUseCase,
