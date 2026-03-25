@@ -147,14 +147,92 @@ Exemplos de nomes esperados:
 - `shouldReuseCompatibleResult`
 - `finalizeDeduplicatedJob`
 
-## Plano de implementacao orientado a TDD
+## Estado atual no repositorio
 
-1. Criar testes de `DocumentAcceptancePolicy` cobrindo MIME, tamanho e paginas.
-2. Criar testes de `CompatibilityKey` e `CompatibleResultReusePolicy`.
-3. Criar testes de aplicacao para `SubmitDocumentUseCase` usando repositorios e storage em memoria.
-4. Criar testes do fluxo de deduplicacao com `reusedResult=true`.
-5. Criar contract tests para adapters de `MongoDB`, `MinIO` e `RabbitMQ`.
-6. Criar um teste E2E para `POST /v1/parsing/jobs` cobrindo upload valido e resposta de aceite.
+O contexto de `Ingestion` ja tem uma base funcional no `orchestrator-api`:
+
+- `SubmitDocumentUseCase` ja valida upload, calcula `hash`, persiste `Document`, cria `ProcessingJob`, cria `JobAttempt`, publica em fila e fecha o fluxo de deduplicacao
+- `DocumentAcceptancePolicy`, `CompatibilityKey` e `CompatibleResultReusePolicy` ja possuem cobertura inicial de testes
+- existe E2E cobrindo upload valido, consulta de status e consulta de resultado
+
+Os gaps mais relevantes para fechar este contexto contra o desenho alvo deste documento sao:
+
+- os adapters padrao ainda sao somente `in-memory`; faltam `MongoDB`, `MinIO` e `RabbitMQ`
+- ainda nao existe `UnitOfWorkPort`, entao persistencia e publicacao nao estao protegidas por uma fronteira transacional explicita
+- a busca de resultado compativel ainda esta acoplada a `ProcessingResultRepositoryPort`; o documento pede uma porta dedicada de lookup
+- a maquina `RECEIVED -> VALIDATED -> STORED -> DEDUPLICATED|REPROCESSED|QUEUED` ainda nao aparece de forma explicita no modelo
+- faltam testes de falha e ordenacao para garantir que nunca haja publicacao em fila antes da persistencia do binario
+
+## Plano de implementacao orientado ao estado atual
+
+### Etapa 1: alinhar modelo, contratos e linguagem ubiqua
+
+1. Resolver a ambiguidade da sequencia oficial do caso de uso.
+   `validateUploadedFileConstraints` depende de `pageCount`, mas a sequencia atual do documento coloca `calculateDocumentHash` antes de `countDocumentPages`. A recomendacao e tratar `countDocumentPages` como parte da validacao ou oficializar a ordem `countDocumentPages -> validateUploadedFileConstraints -> calculateDocumentHash`.
+2. Introduzir `CompatibleResultLookupPort` separado de `ProcessingResultRepositoryPort`.
+   O objetivo e deixar claro que `Ingestion` precisa consultar compatibilidade, nao conhecer detalhes de persistencia de resultado.
+3. Introduzir `UnitOfWorkPort`.
+   Esta porta deve encapsular a gravacao de `Document`, `ProcessingJob`, `JobAttempt`, auditoria e o ponto seguro antes de publicar em fila.
+4. Decidir onde a maquina de estados de `Ingestion` sera representada.
+   A recomendacao pratica para o MVP e persistir os timestamps e os estados em `ProcessingJob`, sem criar outro agregado so para isso.
+5. Formalizar os eventos de dominio do contexto como artefatos nomeados.
+   Mesmo que a publicacao real comece apenas por auditoria interna, os eventos `DocumentAccepted`, `DocumentRejected`, `DocumentStored`, `CompatibleResultReused` e `ProcessingJobQueued` devem existir como linguagem do codigo e dos testes.
+
+### Etapa 2: fechar a fatia de dominio e aplicacao
+
+1. Refatorar `SubmitDocumentUseCase` para espelhar os passos nomeados deste documento.
+   Extrair metodos como `validateUploadedFileConstraints`, `calculateDocumentHash`, `findExistingDocumentByHash`, `findCompatibleResultForSubmission`, `storeOriginalDocumentBinary`, `createProcessingJobForSubmission`, `createFirstAttemptWhenQueueing` e `publishProcessingJobRequested`.
+2. Tornar explicita a transicao de estados de `Ingestion`.
+   O job deve deixar rastros claros de `VALIDATED`, `STORED`, `DEDUPLICATED` e `QUEUED`, inclusive no fluxo de reprocessamento.
+3. Fechar o fluxo de deduplicacao com espelhamento completo do resultado.
+   Alem de `reusedResult=true`, o novo job deve sempre carregar `sourceJobId`, `sourceResultId` e terminalidade coerente com o resultado reutilizado.
+4. Endurecer o caminho de erro.
+   Falha em storage nao pode criar job. Falha depois de persistir o binario mas antes da fila precisa ser transacionada ou explicitamente compensada.
+5. Separar responsabilidade de auditoria de responsabilidade de orquestracao.
+   O caso de uso deve registrar eventos semanticamente corretos, nao apenas um unico `PROCESSING_JOB_QUEUED`.
+
+### Etapa 3: implementar adapters reais do MVP
+
+1. Criar adapter de `MongoDB` para `documents`, `processing_jobs`, `job_attempts` e lookup de resultados compativeis.
+2. Criar adapter de `MinIO` para `BinaryStoragePort`, incluindo convencao de `bucket`, `objectKey` e politicas minimas de retencao.
+3. Criar adapter de `RabbitMQ` para `JobPublisherPort` com o payload minimo oficial do contexto.
+4. Implementar `UnitOfWorkPort` para o conjunto de operacoes no banco.
+   Publicacao em fila deve acontecer apenas apos `commit` bem-sucedido.
+5. Ajustar `OrchestratorApiModule` para selecionar adapters reais por configuracao, mantendo os `in-memory` apenas para testes e bootstrap local.
+
+### Etapa 4: fechar a cobertura de testes que falta
+
+1. Expandir testes de dominio.
+   Cobrir arquivo vazio, combinacoes limite de tamanho e paginas, e regras de reuso com `COMPLETED` e `PARTIAL`.
+2. Expandir testes de aplicacao do `SubmitDocumentUseCase`.
+   Cobrir reuso de `Document` por `hash`, deduplicacao com `sourceResultId`, bypass com `forceReprocess=true` e garantia de ordem `store -> save -> publish`.
+3. Criar testes de falha orientados a infraestrutura.
+   Simular erro em `BinaryStoragePort`, erro em repositorio e erro em `JobPublisherPort` para validar rollback ou compensacao.
+4. Criar contract tests dos adapters reais.
+   Validar contrato de `MongoDB`, `MinIO` e `RabbitMQ` contra doubles compartilhados pelo `testkit`.
+5. Criar E2E especificos de `Ingestion`.
+   Um caso de aceite normal, um caso de deduplicacao sem fila, um caso com `forceReprocess=true` e um caso de rejeicao por limite excedido.
+
+### Etapa 5: criterio de pronto do contexto
+
+O contexto de `Ingestion` pode ser considerado fechado no MVP quando todos os itens abaixo forem verdadeiros:
+
+- `POST /v1/parsing/jobs` aceita `multipart/form-data` com `PDF`, `JPEG` e `PNG`
+- o binario original e persistido antes de qualquer publicacao em fila
+- `Document` e reaproveitado por `hash`
+- um novo `ProcessingJob` e sempre criado por submissao aceita
+- quando existe resultado compativel e `forceReprocess=false`, o job termina como deduplicado e nao publica mensagem
+- quando `forceReprocess=true`, o reuso e ignorado e o job segue para fila
+- os adapters reais de `MongoDB`, `MinIO` e `RabbitMQ` passam em contract tests
+- existe E2E cobrindo o caminho feliz, deduplicacao e validacoes de entrada
+
+## Sequencia recomendada de execucao
+
+1. Refatorar testes e contratos primeiro, sem trocar infra.
+2. Ajustar `SubmitDocumentUseCase` e o modelo de estados.
+3. Introduzir `CompatibleResultLookupPort` e `UnitOfWorkPort`.
+4. Implementar adapters reais de `MongoDB`, `MinIO` e `RabbitMQ`.
+5. Fechar contract tests e E2E com a infraestrutura real ou containerizada.
 
 ## Cenarios de teste obrigatorios
 

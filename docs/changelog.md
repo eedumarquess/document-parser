@@ -1,0 +1,112 @@
+# Changelog
+
+Todas as mudancas relevantes deste repositorio devem ser registradas aqui.
+
+O formato segue uma adaptacao simples de `Keep a Changelog` e usa as tags de contexto dos commits como apoio para rastreabilidade.
+
+## [2026-03-25] - Ingestion MVP com infraestrutura real e compatibilidade por chave
+
+### Added
+
+- `ingestionTransitions` nos `ProcessingJobRecord` da API e do worker para registrar `RECEIVED`, `VALIDATED`, `STORED`, `DEDUPLICATED`, `REPROCESSED` e `QUEUED`.
+- `compatibilityKey` nos `ProcessingResultRecord` para lookup do resultado compativel mais recente.
+- `CompatibleResultLookupPort`, `UnitOfWorkPort` e `BinaryStoragePort.delete` no `orchestrator-api`.
+- `PageCountPolicy` e `DocumentStoragePolicy` para fechar as regras de contagem de paginas e persistencia canonica.
+- Adapters reais de `MongoDB`, `MinIO` e `RabbitMQ` no `orchestrator-api`.
+- Adapters reais de `MongoDB`, `MinIO` e `RabbitMQ` no `document-processing-worker`.
+- Bootstrap por `process.env` para os dois servicos, com `memory` como modo padrao e `real` como modo de infraestrutura externa.
+- Contract tests reais com `testcontainers` para a infraestrutura do `orchestrator-api`, protegidos por `RUN_REAL_INFRA_TESTS=true`.
+- Nova cobertura de dominio para as politicas de ingestao e ampliacao da cobertura de aplicacao para falha de publish, deduplicacao e compensacao de upload.
+
+### Changed
+
+- `SubmitDocumentUseCase` foi refatorado para um fluxo nomeado e em duas etapas: persistencia transacional, publish e so depois criacao do primeiro `JobAttempt`.
+- `ReprocessDocumentUseCase` foi alinhado ao mesmo padrao de persistir antes, publicar depois e criar `JobAttempt` apenas apos publish bem-sucedido.
+- O worker passou a persistir `compatibilityKey` ao gravar `ProcessingResult`.
+- O publisher em memoria da API passou a simular melhor a semantica assincrona da fila, e os E2E foram ajustados para polling de status.
+- `OrchestratorApiModule` e `DocumentProcessingWorkerModule` foram preparados para os novos contratos e adapters.
+
+### Fixed
+
+- Reuso de resultado agora ignora `FAILED`.
+- Falha de publicacao em fila deixa o job persistido com erro transitorio e sem `JobAttempt`.
+- Falha na primeira transacao apos upload remove o binario recem-gravado do storage.
+- O worker e os testes foram atualizados para o novo shape compartilhado de `ProcessingJobRecord` e `ProcessingResultRecord`.
+
+### Technical Notes
+
+- O runtime real exige `MONGODB_URI`, `MINIO_ENDPOINT`, `MINIO_PORT`, `MINIO_USE_SSL`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `MINIO_BUCKET_ORIGINALS`, `RABBITMQ_URL` e `RABBITMQ_QUEUE_PROCESSING_REQUESTED`.
+- O `ProcessingJob.status` de jobs deduplicados continua terminal em `COMPLETED` ou `PARTIAL`; `DEDUPLICATED` fica registrado em `ingestionTransitions`.
+- Os contract tests reais ficaram `skip` por padrao para nao exigir Docker em toda execucao local.
+
+### Commit Contexts
+
+- `feat(deps)`
+- `bug(lockfile)`
+- `feat(orchestrator-contracts)`
+- `feat(worker-contracts)`
+- `feat(orchestrator-domain)`
+- `feat(orchestrator-jobs)`
+- `feat(orchestrator-usecase)`
+- `bug(orchestrator-queue)`
+- `feat(orchestrator-runtime)`
+- `feat(orchestrator-bootstrap)`
+- `feat(orchestrator-tests)`
+- `feat(worker-runtime)`
+- `feat(worker-queue)`
+- `feat(worker-bootstrap)`
+- `feat(worker-tests)`
+- `docs(ingestion)`
+
+## [2026-03-25] - Base inicial do MVP
+
+### Added
+
+- Monorepo `pnpm` com workspace raiz, configuracoes compartilhadas de TypeScript, ESLint e Jest.
+- Pacote `shared-kernel` com enums, constantes, erros e contratos tecnicos compartilhados.
+- Pacote `testkit` com builders, fakes, helpers e harness para sustentar a estrategia TDD.
+- App `orchestrator-api` em `NestJS` com estrutura hexagonal, contratos, dominio, casos de uso, adapters e bootstrap HTTP.
+- App `document-processing-worker` em `NestJS` com estrutura hexagonal, consumo de fila, pipeline simulada, retries e DLQ em memoria.
+- Suites de teste separadas em `domain`, `application`, `contracts` e `e2e` para os dois servicos.
+
+### Changed
+
+- `README.md` foi alinhado ao context map do MVP e ao contrato externo minimo.
+- `docs/ddd/04-result-delivery.md` foi ajustado para refletir `payload` textual e RBAC simples `OWNER` e `OPERATOR`.
+- `docs/database-schemas.md` foi reduzido ao escopo real do MVP, removendo `Template Management` do schema publico.
+- `docs/plano-implementacao.md` foi atualizado para refletir a base tecnica efetivamente implementada.
+
+### Fixed
+
+- Configuracao raiz de lint, typecheck e testes foi estabilizada para o workspace atual.
+- `.gitignore` passou a ignorar artefatos de build e `*.tsbuildinfo`.
+
+### Technical Notes
+
+- O contrato externo atual do MVP expoe apenas `jobId`, `documentId`, `status`, `requestedMode`, `pipelineVersion`, `outputVersion`, `confidence`, `warnings` e `payload`.
+- O runtime padrao desta base usa adapters em memoria para storage, repositorios e fila, preservando o ciclo TDD antes da troca por infraestrutura real.
+- O banco compartilhado entre API e worker continua sendo uma decisao do MVP, mas cada servico mantem seu proprio hexagono.
+
+### Commit Contexts
+
+- `feat(workspace)`
+- `bug(tooling)`
+- `feat(testing)`
+- `feat(shared-kernel)`
+- `feat(testkit)`
+- `feat(orchestrator)`
+- `feat(orchestrator-domain)`
+- `feat(orchestrator-app)`
+- `feat(orchestrator-adapters)`
+- `feat(orchestrator-http)`
+- `feat(orchestrator-tests)`
+- `feat(worker)`
+- `feat(worker-domain)`
+- `feat(worker-app)`
+- `feat(worker-adapters)`
+- `feat(worker-bootstrap)`
+- `feat(worker-tests)`
+- `docs(readme)`
+- `docs(ddd)`
+- `docs(data)`
+- `docs(plan)`
