@@ -9,7 +9,8 @@ import {
   InMemoryJobAttemptRepository,
   InMemoryPageArtifactRepository,
   InMemoryProcessingJobRepository,
-  InMemoryProcessingResultRepository
+  InMemoryProcessingResultRepository,
+  InMemoryUnitOfWork
 } from '../../src/adapters/out/repositories/in-memory.repositories';
 import { ProcessingOutcomePolicy } from '../../src/domain/policies/processing-outcome.policy';
 import { RetryPolicyService } from '../../src/domain/policies/retry-policy.service';
@@ -129,6 +130,7 @@ const createWorkerContext = async (buffer: Buffer, attemptNumber = 1) => {
       deadLetters,
       audit,
       publisher,
+      new InMemoryUnitOfWork(),
       extraction,
       new RetryPolicyService()
     )
@@ -186,16 +188,18 @@ describe('ProcessJobMessageUseCase', () => {
   it('sends terminal failures to DLQ when retries are exhausted', async () => {
     const context = await createWorkerContext(Buffer.from('%PDF-1.4\n/Type /Page\n[[TRANSIENT_FAILURE]]'), 3);
 
-    await context.useCase.execute({
-      message: {
-        documentId: context.documentId,
-        jobId: context.jobId,
-        attemptId: context.attemptId,
-        requestedMode: 'STANDARD',
-        pipelineVersion: DEFAULT_PIPELINE_VERSION,
-        publishedAt: context.clock.now().toISOString()
-      }
-    });
+    await expect(
+      context.useCase.execute({
+        message: {
+          documentId: context.documentId,
+          jobId: context.jobId,
+          attemptId: context.attemptId,
+          requestedMode: 'STANDARD',
+          pipelineVersion: DEFAULT_PIPELINE_VERSION,
+          publishedAt: context.clock.now().toISOString()
+        }
+      })
+    ).rejects.toThrow('Simulated transient failure');
 
     expect(await context.jobs.findById(context.jobId)).toMatchObject({
       status: JobStatus.FAILED

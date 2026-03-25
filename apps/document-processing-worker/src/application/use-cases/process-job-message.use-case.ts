@@ -1,15 +1,26 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
-  AttemptStatus,
+  buildFailureMessage,
+  classifyAttemptFailure,
+  completeAttemptWithOutcome,
+  createPendingAttempt,
+  failAttempt,
+  markAttemptAsQueued,
+  moveFailedAttemptToDeadLetter,
+  recordJobError,
+  rescheduleJobForRetry,
+  startPendingAttempt,
+  type JobAttemptRecord,
+  type ProcessingJobRecord
+} from '@document-parser/document-processing-domain';
+import {
   ErrorCode,
   FatalFailureError,
   JobStatus,
   Role,
-  TransientFailureError,
   type AuditActor,
   type ProcessingJobRequestedMessage
 } from '@document-parser/shared-kernel';
-import { JobAttemptEntity } from '../../domain/entities/job-attempt.entity';
 import { ProcessingResultEntity } from '../../domain/entities/processing-result.entity';
 import { RetryPolicyService } from '../../domain/policies/retry-policy.service';
 import type {
@@ -24,10 +35,18 @@ import type {
   JobPublisherPort,
   PageArtifactRepositoryPort,
   ProcessingJobRepositoryPort,
-  ProcessingResultRepositoryPort
+  ProcessingResultRepositoryPort,
+  UnitOfWorkPort
 } from '../../contracts/ports';
 import { TOKENS } from '../../contracts/tokens';
 import type { ProcessJobMessageCommand } from '../commands/process-job-message.command';
+
+class MessageMovedToDeadLetterError extends Error {
+  public constructor(message: string) {
+    super(message);
+    this.name = 'MessageMovedToDeadLetterError';
+  }
+}
 
 @Injectable()
 export class ProcessJobMessageUseCase {
@@ -48,6 +67,7 @@ export class ProcessJobMessageUseCase {
     @Inject(TOKENS.DEAD_LETTER_REPOSITORY) private readonly deadLetters: DeadLetterRepositoryPort,
     @Inject(TOKENS.AUDIT) private readonly audit: AuditPort,
     @Inject(TOKENS.JOB_PUBLISHER) private readonly publisher: JobPublisherPort,
+    @Inject(TOKENS.UNIT_OF_WORK) private readonly unitOfWork: UnitOfWorkPort,
     @Inject(TOKENS.EXTRACTION_PIPELINE) private readonly extraction: ExtractionPipelinePort,
     private readonly retryPolicy: RetryPolicyService
   ) {}
@@ -67,85 +87,78 @@ export class ProcessJobMessageUseCase {
       });
     }
 
-    const processingJob = {
-      ...job,
-      status: JobStatus.PROCESSING,
-      startedAt: now,
-      updatedAt: now
-    };
-    const processingAttempt = {
-      ...attempt,
-      status: AttemptStatus.PROCESSING,
-      startedAt: now
-    };
+    const started = startPendingAttempt({
+      job,
+      attempt,
+      now
+    });
 
-    await this.jobs.save(processingJob);
-    await this.attempts.save(processingAttempt);
+    await this.unitOfWork.runInTransaction(async () => {
+      await this.jobs.save(started.job);
+      await this.attempts.save(started.attempt);
+    });
 
     try {
       const original = await this.storage.read(document.storageReference);
       const outcome = await this.extraction.extract({
         actor: job.requestedBy,
         document,
-        job: processingJob,
-        attempt: processingAttempt,
+        job: started.job,
+        attempt: started.attempt,
         original
       });
 
-      await this.artifacts.saveMany(
-        outcome.artifacts.map((artifact) => ({
-          ...artifact,
-          documentId: document.documentId,
-          jobId: job.jobId,
+      const completed = completeAttemptWithOutcome({
+        job: started.job,
+        attempt: started.attempt,
+        outcome,
+        now
+      });
+
+      await this.unitOfWork.runInTransaction(async () => {
+        await this.artifacts.saveMany(
+          outcome.artifacts.map((artifact) => ({
+            ...artifact,
+            documentId: document.documentId,
+            jobId: job.jobId,
+            createdAt: now
+          }))
+        );
+
+        await this.results.save(
+          ProcessingResultEntity.create({
+            resultId: this.idGenerator.next('result'),
+            jobId: job.jobId,
+            documentId: document.documentId,
+            hash: document.hash,
+            requestedMode: job.requestedMode,
+            pipelineVersion: job.pipelineVersion,
+            outputVersion: job.outputVersion,
+            outcome,
+            now
+          })
+        );
+
+        await this.attempts.save(completed.attempt);
+        await this.jobs.save(completed.job);
+        await this.audit.record({
+          eventId: this.idGenerator.next('audit'),
+          eventType: 'PROCESSING_COMPLETED',
+          actor: this.systemActor,
+          metadata: {
+            jobId: job.jobId,
+            attemptId: attempt.attemptId,
+            status: outcome.status
+          },
           createdAt: now
-        }))
-      );
-
-      await this.results.save(
-        ProcessingResultEntity.create({
-          resultId: this.idGenerator.next('result'),
-          jobId: job.jobId,
-          documentId: document.documentId,
-          hash: document.hash,
-          requestedMode: job.requestedMode,
-          pipelineVersion: job.pipelineVersion,
-          outputVersion: job.outputVersion,
-          outcome,
-          now
-        })
-      );
-
-      await this.attempts.save({
-        ...processingAttempt,
-        status: AttemptStatus.COMPLETED,
-        fallbackUsed: outcome.fallbackUsed,
-        finishedAt: now,
-        latencyMs: outcome.totalLatencyMs
-      });
-      await this.jobs.save({
-        ...processingJob,
-        status: outcome.status,
-        warnings: outcome.warnings,
-        finishedAt: now,
-        updatedAt: now
-      });
-      await this.audit.record({
-        eventId: this.idGenerator.next('audit'),
-        eventType: 'PROCESSING_COMPLETED',
-        actor: this.systemActor,
-        metadata: {
-          jobId: job.jobId,
-          attemptId: attempt.attemptId,
-          status: outcome.status
-        },
-        createdAt: now
+        });
       });
     } catch (error) {
       await this.handleFailure({
         error,
         message,
-        job: processingJob,
-        attempt: processingAttempt,
+        job: started.job,
+        attempt: started.attempt,
         now
       });
     }
@@ -154,90 +167,153 @@ export class ProcessJobMessageUseCase {
   private async handleFailure(input: {
     error: unknown;
     message: ProcessingJobRequestedMessage;
-    job: Awaited<ReturnType<ProcessingJobRepositoryPort['findById']>> extends infer T ? Exclude<T, undefined> : never;
-    attempt: Awaited<ReturnType<JobAttemptRepositoryPort['findById']>> extends infer T ? Exclude<T, undefined> : never;
+    job: ProcessingJobRecord;
+    attempt: JobAttemptRecord;
     now: Date;
   }): Promise<void> {
-    const isTransient = input.error instanceof TransientFailureError;
-    const shouldRetry = isTransient && this.retryPolicy.shouldRetry(input.attempt.attemptNumber);
-
-    await this.attempts.save({
-      ...input.attempt,
-      status: AttemptStatus.FAILED,
-      finishedAt: input.now,
-      errorCode: isTransient ? ErrorCode.TRANSIENT_FAILURE : ErrorCode.FATAL_FAILURE,
+    const classification = classifyAttemptFailure(input.error);
+    const failedAttempt = failAttempt({
+      attempt: input.attempt,
+      errorCode: classification,
       errorDetails: {
-        message: input.error instanceof Error ? input.error.message : 'Unknown failure'
-      }
+        message: buildFailureMessage(input.error)
+      },
+      now: input.now
+    });
+    const decision = this.retryPolicy.decideRetryAfterAttemptFailure({
+      attemptNumber: input.attempt.attemptNumber,
+      classification
     });
 
-    if (shouldRetry) {
-      const nextAttempt = JobAttemptEntity.createRetry({
+    if (decision.action === 'retry') {
+      const nextAttempt = createPendingAttempt({
         attemptId: this.idGenerator.next('attempt'),
         jobId: input.job.jobId,
-        attemptNumber: input.attempt.attemptNumber + 1,
+        attemptNumber: decision.nextAttemptNumber,
         pipelineVersion: input.job.pipelineVersion,
         now: input.now
       });
-      await this.attempts.save(nextAttempt);
-      await this.jobs.save({
-        ...input.job,
-        status: JobStatus.QUEUED,
-        updatedAt: input.now
-      });
-      await this.publisher.publish({
+      const retryMessage = {
         ...input.message,
         attemptId: nextAttempt.attemptId,
         publishedAt: input.now.toISOString()
+      };
+
+      try {
+        await this.publisher.publishRetry(retryMessage, input.attempt.attemptNumber);
+      } catch (publishError) {
+        await this.persistDeadLetter({
+          job: recordJobError({
+            job: input.job,
+            errorCode: ErrorCode.DLQ_ERROR,
+            errorMessage: buildFailureMessage(publishError),
+            now: input.now,
+            status: JobStatus.FAILED
+          }),
+          attempt: {
+            ...nextAttempt,
+            errorCode: ErrorCode.DLQ_ERROR,
+            errorDetails: {
+              message: buildFailureMessage(publishError),
+              retrySourceAttemptId: failedAttempt.attemptId
+            }
+          },
+          reasonCode: ErrorCode.DLQ_ERROR,
+          reasonMessage: buildFailureMessage(publishError),
+          payloadSnapshot: {
+            jobId: input.job.jobId,
+            attemptId: nextAttempt.attemptId,
+            documentId: input.job.documentId
+          },
+          previousAttempts: [failedAttempt],
+          now: input.now
+        });
+        throw new MessageMovedToDeadLetterError(buildFailureMessage(publishError));
+      }
+
+      const queuedJob = rescheduleJobForRetry({
+        job: input.job,
+        now: input.now
       });
-      await this.audit.record({
-        eventId: this.idGenerator.next('audit'),
-        eventType: 'PROCESSING_RETRY_SCHEDULED',
-        actor: this.systemActor,
-        metadata: {
-          jobId: input.job.jobId,
-          failedAttemptId: input.attempt.attemptId,
-          nextAttemptId: nextAttempt.attemptId,
-          retryDelayMs: this.retryPolicy.calculateDelayMs(input.attempt.attemptNumber)
-        },
-        createdAt: input.now
+      const queuedAttempt = markAttemptAsQueued({
+        attempt: nextAttempt
+      });
+
+      await this.unitOfWork.runInTransaction(async () => {
+        await this.attempts.save(failedAttempt);
+        await this.attempts.save(queuedAttempt);
+        await this.jobs.save(queuedJob);
+        await this.audit.record({
+          eventId: this.idGenerator.next('audit'),
+          eventType: 'PROCESSING_RETRY_SCHEDULED',
+          actor: this.systemActor,
+          metadata: {
+            jobId: input.job.jobId,
+            failedAttemptId: input.attempt.attemptId,
+            nextAttemptId: nextAttempt.attemptId,
+            retryDelayMs: decision.delayMs
+          },
+          createdAt: input.now
+        });
       });
       return;
     }
 
-    await this.jobs.save({
-      ...input.job,
-      status: JobStatus.FAILED,
-      errorCode: isTransient ? ErrorCode.TRANSIENT_FAILURE : ErrorCode.FATAL_FAILURE,
-      errorMessage: input.error instanceof Error ? input.error.message : 'Unknown failure',
-      finishedAt: input.now,
-      updatedAt: input.now
-    });
-    await this.deadLetters.save({
-      dlqEventId: this.idGenerator.next('dlq'),
-      jobId: input.job.jobId,
-      attemptId: input.attempt.attemptId,
-      reasonCode: isTransient ? ErrorCode.DLQ_ERROR : ErrorCode.FATAL_FAILURE,
-      reasonMessage: input.error instanceof Error ? input.error.message : 'Unknown failure',
-      retryCount: input.attempt.attemptNumber,
+    await this.persistDeadLetter({
+      job: input.job,
+      attempt: failedAttempt,
+      reasonCode: decision.reasonCode,
+      reasonMessage: buildFailureMessage(input.error),
       payloadSnapshot: {
         jobId: input.job.jobId,
         attemptId: input.attempt.attemptId,
         documentId: input.job.documentId
       },
-      firstSeenAt: input.now,
-      lastSeenAt: input.now
+      now: input.now
     });
-    await this.audit.record({
-      eventId: this.idGenerator.next('audit'),
-      eventType: 'PROCESSING_FAILED',
-      actor: this.systemActor,
-      metadata: {
-        jobId: input.job.jobId,
-        attemptId: input.attempt.attemptId,
-        errorMessage: input.error instanceof Error ? input.error.message : 'Unknown failure'
-      },
-      createdAt: input.now
+
+    throw new MessageMovedToDeadLetterError(buildFailureMessage(input.error));
+  }
+
+  private async persistDeadLetter(input: {
+    job: ProcessingJobRecord;
+    attempt: JobAttemptRecord;
+    reasonCode: ErrorCode.DLQ_ERROR | ErrorCode.FATAL_FAILURE | ErrorCode.TIMEOUT;
+    reasonMessage: string;
+    payloadSnapshot: Record<string, unknown>;
+    previousAttempts?: JobAttemptRecord[];
+    now: Date;
+  }): Promise<void> {
+    const moved = moveFailedAttemptToDeadLetter({
+      job: input.job,
+      attempt: input.attempt,
+      queueName: input.job.queueName,
+      reasonCode: input.reasonCode,
+      reasonMessage: input.reasonMessage,
+      payloadSnapshot: input.payloadSnapshot,
+      deadLetterEventId: this.idGenerator.next('dlq'),
+      now: input.now
+    });
+
+    await this.unitOfWork.runInTransaction(async () => {
+      for (const previousAttempt of input.previousAttempts ?? []) {
+        await this.attempts.save(previousAttempt);
+      }
+      await this.jobs.save(moved.job);
+      await this.attempts.save(moved.attempt);
+      await this.deadLetters.save(moved.deadLetter);
+      await this.audit.record({
+        eventId: this.idGenerator.next('audit'),
+        eventType: 'PROCESSING_FAILED',
+        actor: this.systemActor,
+        metadata: {
+          jobId: moved.job.jobId,
+          attemptId: moved.attempt.attemptId,
+          errorCode: input.reasonCode,
+          errorMessage: input.reasonMessage
+        },
+        createdAt: input.now
+      });
     });
   }
 }
