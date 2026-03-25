@@ -8,7 +8,7 @@ import {
   MongoProcessingJobRepositoryAdapter,
   MongoProcessingResultRepositoryAdapter
 } from '../adapters/out/repositories/mongodb.repositories';
-import { MongoDatabaseProvider, MongoSessionContext } from '../adapters/out/repositories/mongodb.provider';
+import { MongoDatabaseProvider, MongoSessionContext, MongoUnitOfWorkAdapter } from '../adapters/out/repositories/mongodb.provider';
 import { MinioBinaryStorageAdapter } from '../adapters/out/storage/minio-binary-storage.adapter';
 import { RabbitMqJobPublisherAdapter } from '../adapters/out/queue/rabbitmq-job-publisher.adapter';
 import type { WorkerProviderOverrides } from '../app.module';
@@ -61,7 +61,8 @@ export function buildWorkerRuntimeBootstrapFromEnv(): WorkerRuntimeBootstrap {
       artifacts: new MongoPageArtifactRepositoryAdapter(mongoProvider, sessionContext),
       deadLetters: new MongoDeadLetterRepositoryAdapter(mongoProvider, sessionContext),
       audit: new MongoAuditRepositoryAdapter(mongoProvider, sessionContext),
-      publisher: new RabbitMqJobPublisherAdapter(rabbitMqUrl, queueName)
+      publisher: new RabbitMqJobPublisherAdapter(rabbitMqUrl, queueName),
+      unitOfWork: new MongoUnitOfWorkAdapter(mongoProvider, sessionContext)
     }
   };
 }
@@ -76,7 +77,10 @@ function createNoopStorage(): BinaryStoragePort {
 
 function createNoopPublisher(): JobPublisherPort {
   return {
-    async publish(): Promise<void> {
+    async publishRequested(): Promise<void> {
+      return;
+    },
+    async publishRetry(): Promise<void> {
       return;
     }
   };

@@ -1,6 +1,6 @@
 import type { Channel, ChannelModel, ConsumeMessage } from 'amqplib';
 import { connect } from 'amqplib';
-import type { ProcessingJobRequestedMessage } from '@document-parser/shared-kernel';
+import { RETRY_DELAYS_MS, type ProcessingJobRequestedMessage } from '@document-parser/shared-kernel';
 import type { ProcessingJobConsumer } from './processing-job.consumer';
 
 export class RabbitMqProcessingJobListener {
@@ -20,7 +20,7 @@ export class RabbitMqProcessingJobListener {
 
     const connection = await connect(this.url);
     const channel = await connection.createChannel();
-    await channel.assertQueue(this.queueName, { durable: true });
+    await this.assertTopology(channel);
     await channel.prefetch(1);
     await channel.consume(this.queueName, (message) => {
       void this.handleMessage(message);
@@ -48,5 +48,35 @@ export class RabbitMqProcessingJobListener {
     } catch {
       this.channel.nack(message, false, false);
     }
+  }
+
+  private async assertTopology(channel: Channel): Promise<void> {
+    await channel.assertQueue(this.getDeadLetterQueueName(), { durable: true });
+    await channel.assertQueue(this.queueName, {
+      durable: true,
+      arguments: {
+        'x-dead-letter-exchange': '',
+        'x-dead-letter-routing-key': this.getDeadLetterQueueName()
+      }
+    });
+
+    for (let index = 0; index < RETRY_DELAYS_MS.length; index += 1) {
+      await channel.assertQueue(this.getRetryQueueName(index + 1), {
+        durable: true,
+        arguments: {
+          'x-message-ttl': RETRY_DELAYS_MS[index],
+          'x-dead-letter-exchange': '',
+          'x-dead-letter-routing-key': this.queueName
+        }
+      });
+    }
+  }
+
+  private getRetryQueueName(retryAttempt: number): string {
+    return `${this.queueName}.retry.${retryAttempt}`;
+  }
+
+  private getDeadLetterQueueName(): string {
+    return `${this.queueName}.dlq`;
   }
 }
