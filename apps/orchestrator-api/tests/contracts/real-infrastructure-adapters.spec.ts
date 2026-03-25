@@ -14,6 +14,13 @@ import { MongoDatabaseProvider, MongoSessionContext, MongoUnitOfWorkAdapter } fr
 import { MinioBinaryStorageAdapter } from '../../src/adapters/out/storage/minio-binary-storage.adapter';
 import { CompatibilityKey } from '../../src/domain/value-objects/compatibility-key';
 
+const expectNoTemplateFields = (payload: Record<string, unknown>) => {
+  expect(payload).not.toHaveProperty('templateId');
+  expect(payload).not.toHaveProperty('templateVersion');
+  expect(payload).not.toHaveProperty('templateStatus');
+  expect(payload).not.toHaveProperty('matchingRules');
+};
+
 const describeRealInfra =
   process.env.RUN_REAL_INFRA_TESTS === 'true' ? describe : describe.skip;
 
@@ -249,6 +256,24 @@ describeRealInfra('Real infrastructure adapter contracts', () => {
     await expect(documents.findById('doc-rollback')).resolves.toBeUndefined();
   });
 
+  it('keeps only the current orchestrator Mongo collections and no template collections', async () => {
+    const database = await mongoProvider.getDatabase();
+    const collectionNames = (await database.listCollections({}, { nameOnly: true }).toArray())
+      .map((collection) => collection.name)
+      .filter((name) => !name.startsWith('system.'))
+      .sort();
+
+    expect(collectionNames).toEqual([
+      'audit_events',
+      'documents',
+      'job_attempts',
+      'processing_jobs',
+      'processing_results'
+    ]);
+    expect(collectionNames).not.toContain('templates');
+    expect(collectionNames).not.toContain('template_versions');
+  });
+
   it('stores, reads, and deletes the original binary in MinIO', async () => {
     const reference = await storage.storeOriginal({
       documentId: 'doc-storage',
@@ -281,7 +306,12 @@ describeRealInfra('Real infrastructure adapter contracts', () => {
     const message = await channel.get(queueName, { noAck: true });
 
     expect(message).not.toBe(false);
-    expect(message && message.content.toString('utf8')).toBe(JSON.stringify(payload));
+    const parsedPayload = JSON.parse(message ? message.content.toString('utf8') : '{}') as Record<string, unknown>;
+    expect(parsedPayload).toEqual(payload);
+    expect(Object.keys(parsedPayload).sort()).toEqual(
+      ['attemptId', 'documentId', 'jobId', 'pipelineVersion', 'publishedAt', 'requestedMode'].sort()
+    );
+    expectNoTemplateFields(parsedPayload);
 
     await channel.close();
     await connection.close();
@@ -316,7 +346,12 @@ describeRealInfra('Real infrastructure adapter contracts', () => {
     if (retriedMessage === false) {
       throw new Error('expected message to return from retry queue');
     }
-    expect(retriedMessage.content.toString('utf8')).toBe(JSON.stringify(payload));
+    const parsedPayload = JSON.parse(retriedMessage.content.toString('utf8')) as Record<string, unknown>;
+    expect(parsedPayload).toEqual(payload);
+    expect(Object.keys(parsedPayload).sort()).toEqual(
+      ['attemptId', 'documentId', 'jobId', 'pipelineVersion', 'publishedAt', 'requestedMode'].sort()
+    );
+    expectNoTemplateFields(parsedPayload);
 
     await channel.close();
     await connection.close();
@@ -347,7 +382,9 @@ describeRealInfra('Real infrastructure adapter contracts', () => {
 
     const dlqMessage = await channel.get(`${queueName}.dlq`, { noAck: true });
     expect(dlqMessage).not.toBe(false);
-    expect(dlqMessage && dlqMessage.content.toString('utf8')).toBe(JSON.stringify(payload));
+    const parsedPayload = JSON.parse(dlqMessage ? dlqMessage.content.toString('utf8') : '{}') as Record<string, unknown>;
+    expect(parsedPayload).toEqual(payload);
+    expectNoTemplateFields(parsedPayload);
 
     await channel.close();
     await connection.close();
