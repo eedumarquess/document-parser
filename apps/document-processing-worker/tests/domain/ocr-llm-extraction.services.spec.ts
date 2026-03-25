@@ -17,9 +17,26 @@ describe('TextNormalizationService', () => {
 describe('SensitiveDataMaskingService', () => {
   const service = new SensitiveDataMaskingService();
 
-  it('masks identifiers before sending text to an external LLM', () => {
-    expect(service.maskForExternalLlm('cpf 123.456.789-00 email user@example.com')).toBe(
-      'cpf [cpf] email [email]'
+  it('masks sensitive identifiers with reversible placeholders and preserves numeric semantics', () => {
+    const masked = service.maskForExternalLlm(
+      'cpf 123.456.789-00 telefone 11 99888-7766 email user@example.com dose 12 mg idade 45 data 2026-03-25'
+    );
+
+    expect(masked).toEqual({
+      maskedText: 'cpf [cpf_1] telefone [phone_1] email [email_1] dose 12 mg idade 45 data 2026-03-25',
+      placeholderMap: {
+        '[cpf_1]': '123.456.789-00',
+        '[phone_1]': '11 99888-7766',
+        '[email_1]': 'user@example.com'
+      }
+    });
+  });
+
+  it('restores placeholders back into recovered text before final consolidation', () => {
+    const masked = service.maskForExternalLlm('cpf 123.456.789-00 telefone 11 99888-7766');
+
+    expect(service.restoreMaskedText('documento [cpf_1] contato [phone_1]', masked.placeholderMap)).toBe(
+      'documento 123.456.789-00 contato 11 99888-7766'
     );
   });
 });
