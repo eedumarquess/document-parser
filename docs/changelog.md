@@ -4,6 +4,46 @@ Todas as mudancas relevantes deste repositorio devem ser registradas aqui.
 
 O formato segue uma adaptacao simples de `Keep a Changelog` e usa as tags de contexto dos commits como apoio para rastreabilidade.
 
+## [2026-03-25] - Corretude de resultados, reuso deduplicado e DLQ de contexto
+
+### Added
+
+- Cobertura nova para a invariante de um unico `ProcessingResult` por `jobId` em adapters `in-memory`, contratos Mongo e fluxo de aplicacao da API.
+- Novos cenarios de aplicacao do worker para contexto incompleto, cobrindo `dead_letter_events`, auditoria `PROCESSING_FAILED` e fechamento terminal quando `job` e `attempt` existem.
+- Testes de dominio e contrato para o novo mascaramento reversivel do fallback LLM com placeholders por categoria.
+
+### Changed
+
+- Repositorios de `ProcessingResult` na API e no worker passaram a tratar `jobId` como chave logica de escrita, mantendo `resultId` como identificador estavel e adicionando unicidade Mongo por `processing_results.jobId`.
+- O reuso deduplicado da `orchestrator-api` passou a copiar `promptVersion`, `modelVersion` e `normalizationVersion`, e a aplicar a mesma regra de lineage em `ProcessingJob` e `ProcessingResult`.
+- O `SensitiveDataMaskingService` passou a gerar `maskedText + placeholderMap`, preservando semantica numerica e restaurando placeholders no texto consolidado antes da persistencia do resultado final.
+- O worker passou a tratar contexto ausente antes do `startPendingAttempt`, roteando falhas observaveis para o fluxo de DLQ de aplicacao sem alterar o comportamento do listener frente a `nack(false, false)`.
+
+### Fixed
+
+- `ProcessingResult` duplicado para o mesmo job deixou de ser possivel pelos adapters padrao do projeto.
+- Reuso em cadeia de resultado compativel nao perde mais `sourceJobId` original nem os version stamps tecnicos do resultado reutilizado.
+- O fallback LLM deixou de destruir datas, doses, idades e outros numeros nao sensiveis ao mascarar texto para providers externos.
+- Falhas de contexto do worker agora deixam trilha em `dead_letter_events` e auditoria de aplicacao, em vez de escaparem apenas para a DLQ do broker.
+
+### Technical Notes
+
+- O contrato HTTP e o payload RabbitMQ permaneceram inalterados nesta fase.
+- A restauracao de placeholders acontece apenas no payload consolidado e no `ProcessingResult`; artefatos tecnicos de `MASKED_TEXT`, prompt e resposta continuam mascarados.
+- O indice unico em `processing_results.jobId` pressupoe ausencia de duplicatas legadas no banco antes do rollout.
+
+### Commit Contexts
+
+- `bug(orchestrator-result-contracts)`
+- `bug(orchestrator-result-repository)`
+- `bug(orchestrator-result-infra-tests)`
+- `bug(worker-result-repository)`
+- `bug(worker-llm-masking)`
+- `bug(worker-context-dlq)`
+- `bug(worker-llm-contracts)`
+- `bug(worker-llm-domain)`
+- `docs(changelog)`
+
 ## [2026-03-25] - Audit/Observability com traceId, TTL e replay manual de DLQ
 
 ### Added
