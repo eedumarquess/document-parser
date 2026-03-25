@@ -33,6 +33,7 @@ export interface BinaryStoragePort {
     buffer: Buffer;
   }): Promise<StorageReference>;
   read(storageReference: StorageReference): Promise<Buffer>;
+  delete(storageReference: StorageReference): Promise<void>;
 }
 
 export interface DocumentRepositoryPort {
@@ -54,14 +55,21 @@ export interface JobAttemptRepositoryPort {
 }
 
 export interface ProcessingResultRepositoryPort {
-  findCompatibleResult(input: {
-    documentId: string;
+  findByJobId(jobId: string): Promise<ProcessingResultRecord | undefined>;
+  save(result: ProcessingResultRecord): Promise<void>;
+}
+
+export interface CompatibleResultLookupPort {
+  findByCompatibilityKey(input: {
+    hash: string;
     requestedMode: string;
     pipelineVersion: string;
     outputVersion: string;
   }): Promise<ProcessingResultRecord | undefined>;
-  findByJobId(jobId: string): Promise<ProcessingResultRecord | undefined>;
-  save(result: ProcessingResultRecord): Promise<void>;
+}
+
+export interface UnitOfWorkPort {
+  runInTransaction<T>(work: () => Promise<T>): Promise<T>;
 }
 
 export interface JobPublisherPort {
@@ -78,4 +86,3 @@ export interface AuthorizationPort {
   ensureCanRead(actor: AuditActor): void;
   ensureCanReprocess(actor: AuditActor): void;
 }
-
