@@ -2,8 +2,12 @@ import {
   AuthorizationError,
   DEFAULT_OUTPUT_VERSION,
   DEFAULT_PIPELINE_VERSION,
+  InMemoryLoggingAdapter,
+  InMemoryMetricsAdapter,
+  InMemoryTracingAdapter,
   JobStatus,
   NotFoundError,
+  RedactionPolicyService,
   Role,
   TransientFailureError,
   ValidationError
@@ -12,6 +16,7 @@ import { FixedClock, IncrementalIdGenerator, buildActor, buildUploadedFile } fro
 import { InMemoryJobPublisherAdapter } from '../../src/adapters/out/queue/in-memory-job-publisher.adapter';
 import {
   InMemoryAuditRepository,
+  InMemoryDeadLetterRepository,
   InMemoryDocumentRepository,
   InMemoryJobAttemptRepository,
   InMemoryProcessingJobRepository,
@@ -23,6 +28,7 @@ import { Sha256HashingAdapter } from '../../src/adapters/out/storage/sha256-hash
 import { SimplePageCounterAdapter } from '../../src/adapters/out/storage/simple-page-counter.adapter';
 import { SimpleRbacAuthorizationAdapter } from '../../src/adapters/out/auth/simple-rbac.adapter';
 import { SubmitDocumentUseCase } from '../../src/application/use-cases/submit-document.use-case';
+import { ReplayDeadLetterUseCase } from '../../src/application/use-cases/replay-dead-letter.use-case';
 import { ReprocessDocumentUseCase } from '../../src/application/use-cases/reprocess-document.use-case';
 import { CompatibleResultReusePolicy } from '../../src/domain/policies/compatible-result-reuse.policy';
 import { DocumentStoragePolicy } from '../../src/domain/policies/document-storage.policy';
@@ -79,10 +85,15 @@ const createSubmitDocumentUseCase = (overrides: Partial<{
   const jobs = new InMemoryProcessingJobRepository();
   const attempts = new InMemoryJobAttemptRepository();
   const results = new InMemoryProcessingResultRepository();
+  const deadLetters = new InMemoryDeadLetterRepository();
   const publisher = overrides.publisher ?? new InMemoryJobPublisherAdapter();
   const audit = new InMemoryAuditRepository();
+  const logging = new InMemoryLoggingAdapter();
+  const metrics = new InMemoryMetricsAdapter();
+  const tracing = new InMemoryTracingAdapter();
   const unitOfWork = overrides.unitOfWork ?? new InMemoryUnitOfWork();
   const retentionPolicy = new RetentionPolicyService();
+  const redactionPolicy = new RedactionPolicyService();
 
   return {
     authorization,
@@ -95,9 +106,15 @@ const createSubmitDocumentUseCase = (overrides: Partial<{
     jobs,
     attempts,
     results,
+    deadLetters,
     publisher,
     audit,
+    logging,
+    metrics,
+    tracing,
     unitOfWork,
+    retentionPolicy,
+    redactionPolicy,
     useCase: new SubmitDocumentUseCase(
       authorization,
       clock,
@@ -112,11 +129,16 @@ const createSubmitDocumentUseCase = (overrides: Partial<{
       results,
       publisher,
       audit,
+      logging,
+      metrics,
+      tracing,
       unitOfWork,
       new DocumentAcceptancePolicy(),
       new CompatibleResultReusePolicy(),
       new PageCountPolicy(),
-      new DocumentStoragePolicy(retentionPolicy)
+      new DocumentStoragePolicy(retentionPolicy),
+      retentionPolicy,
+      redactionPolicy
     )
   };
 };
@@ -130,7 +152,30 @@ const createReprocessUseCase = (context: ReturnType<typeof createSubmitDocumentU
     context.attempts,
     context.publisher,
     context.audit,
-    context.unitOfWork
+    context.logging,
+    context.metrics,
+    context.tracing,
+    context.unitOfWork,
+    context.retentionPolicy,
+    context.redactionPolicy
+  );
+
+const createReplayDeadLetterUseCase = (context: ReturnType<typeof createSubmitDocumentUseCase>) =>
+  new ReplayDeadLetterUseCase(
+    context.authorization,
+    context.clock,
+    context.idGenerator,
+    context.deadLetters,
+    context.jobs,
+    context.attempts,
+    context.publisher,
+    context.audit,
+    context.logging,
+    context.metrics,
+    context.tracing,
+    context.unitOfWork,
+    context.retentionPolicy,
+    context.redactionPolicy
   );
 
 describe('SubmitDocumentUseCase', () => {
@@ -143,7 +188,8 @@ describe('SubmitDocumentUseCase', () => {
         requestedMode: 'STANDARD',
         forceReprocess: false
       },
-      buildActor()
+      buildActor(),
+      'trace-submit-new-job'
     );
 
     expect(response.status).toBe(JobStatus.QUEUED);
@@ -168,7 +214,8 @@ describe('SubmitDocumentUseCase', () => {
         requestedMode: 'STANDARD',
         forceReprocess: false
       },
-      actor
+      actor,
+      'trace-submit-first'
     );
     const secondResponse = await context.useCase.execute(
       {
@@ -176,7 +223,8 @@ describe('SubmitDocumentUseCase', () => {
         requestedMode: 'EXPANDED',
         forceReprocess: false
       },
-      actor
+      actor,
+      'trace-submit-second'
     );
 
     expect(secondResponse.documentId).toBe(firstResponse.documentId);
@@ -193,7 +241,8 @@ describe('SubmitDocumentUseCase', () => {
         requestedMode: 'STANDARD',
         forceReprocess: false
       },
-      actor
+      actor,
+      'trace-submit-compatible-source'
     );
     const compatibilityKey = CompatibilityKey.build({
       hash: await context.hashing.calculateHash(file.buffer),
@@ -217,7 +266,8 @@ describe('SubmitDocumentUseCase', () => {
       engineUsed: 'OCR',
       totalLatencyMs: 1000,
       createdAt: new Date(),
-      updatedAt: new Date()
+      updatedAt: new Date(),
+      retentionUntil: new Date('2026-06-23T12:00:00.000Z')
     });
 
     const secondResponse = await context.useCase.execute(
@@ -226,7 +276,8 @@ describe('SubmitDocumentUseCase', () => {
         requestedMode: 'STANDARD',
         forceReprocess: false
       },
-      actor
+      actor,
+      'trace-submit-compatible-reuse'
     );
 
     expect(secondResponse.reusedResult).toBe(true);
@@ -245,7 +296,8 @@ describe('SubmitDocumentUseCase', () => {
         requestedMode: 'STANDARD',
         forceReprocess: false
       },
-      actor
+      actor,
+      'trace-submit-extra-metadata-source'
     );
     const compatibilityKey = CompatibilityKey.build({
       hash: await context.hashing.calculateHash(file.buffer),
@@ -269,6 +321,7 @@ describe('SubmitDocumentUseCase', () => {
       totalLatencyMs: 1000,
       createdAt: new Date(),
       updatedAt: new Date(),
+      retentionUntil: new Date('2026-06-23T12:00:00.000Z'),
       templateId: 'legacy-template'
     };
 
@@ -280,7 +333,8 @@ describe('SubmitDocumentUseCase', () => {
         requestedMode: 'STANDARD',
         forceReprocess: false
       },
-      actor
+      actor,
+      'trace-submit-extra-metadata-reuse'
     );
 
     expect(secondResponse.reusedResult).toBe(true);
@@ -298,7 +352,8 @@ describe('SubmitDocumentUseCase', () => {
         requestedMode: 'STANDARD',
         forceReprocess: false
       },
-      actor
+      actor,
+      'trace-submit-force-source'
     );
     const compatibilityKey = CompatibilityKey.build({
       hash: await context.hashing.calculateHash(file.buffer),
@@ -322,7 +377,8 @@ describe('SubmitDocumentUseCase', () => {
       engineUsed: 'OCR',
       totalLatencyMs: 1000,
       createdAt: new Date(),
-      updatedAt: new Date()
+      updatedAt: new Date(),
+      retentionUntil: new Date('2026-06-23T12:00:00.000Z')
     });
 
     const secondResponse = await context.useCase.execute(
@@ -331,7 +387,8 @@ describe('SubmitDocumentUseCase', () => {
         requestedMode: 'STANDARD',
         forceReprocess: true
       },
-      actor
+      actor,
+      'trace-submit-force-second'
     );
 
     expect(secondResponse.reusedResult).toBe(false);
@@ -348,7 +405,8 @@ describe('SubmitDocumentUseCase', () => {
           requestedMode: 'STANDARD',
           forceReprocess: false
         },
-        buildActor({ role: Role.OPERATOR })
+        buildActor({ role: Role.OPERATOR }),
+        'trace-submit-forbidden'
       )
     ).rejects.toBeInstanceOf(AuthorizationError);
   });
@@ -371,7 +429,8 @@ describe('SubmitDocumentUseCase', () => {
           requestedMode: 'STANDARD',
           forceReprocess: false
         },
-        buildActor()
+        buildActor(),
+        'trace-submit-publish-failed'
       )
     ).rejects.toBeInstanceOf(TransientFailureError);
 
@@ -401,7 +460,8 @@ describe('SubmitDocumentUseCase', () => {
           requestedMode: 'STANDARD',
           forceReprocess: false
         },
-        buildActor()
+        buildActor(),
+        'trace-submit-transaction-failed'
       )
     ).rejects.toThrow('transaction exploded');
 
@@ -423,7 +483,8 @@ describe('ReprocessDocumentUseCase', () => {
         requestedMode: 'STANDARD',
         forceReprocess: false
       },
-      actor
+      actor,
+      'trace-reprocess-source-validation'
     );
 
     await expect(
@@ -432,7 +493,8 @@ describe('ReprocessDocumentUseCase', () => {
           jobId: initialJob.jobId,
           reason: '   '
         },
-        actor
+        actor,
+        'trace-reprocess-validation'
       )
     ).rejects.toBeInstanceOf(ValidationError);
   });
@@ -446,7 +508,8 @@ describe('ReprocessDocumentUseCase', () => {
           jobId: 'missing-job',
           reason: 'model update'
         },
-        buildActor()
+        buildActor(),
+        'trace-reprocess-missing'
       )
     ).rejects.toBeInstanceOf(NotFoundError);
   });
@@ -460,7 +523,8 @@ describe('ReprocessDocumentUseCase', () => {
         requestedMode: 'STANDARD',
         forceReprocess: false
       },
-      actor
+      actor,
+      'trace-reprocess-source-forbidden'
     );
 
     await expect(
@@ -469,7 +533,8 @@ describe('ReprocessDocumentUseCase', () => {
           jobId: initialJob.jobId,
           reason: 'model update'
         },
-        buildActor({ role: Role.OPERATOR })
+        buildActor({ role: Role.OPERATOR }),
+        'trace-reprocess-forbidden'
       )
     ).rejects.toBeInstanceOf(AuthorizationError);
   });
@@ -483,7 +548,8 @@ describe('ReprocessDocumentUseCase', () => {
         requestedMode: 'STANDARD',
         forceReprocess: false
       },
-      actor
+      actor,
+      'trace-reprocess-source-success'
     );
 
     const response = await createReprocessUseCase(context).execute(
@@ -491,7 +557,8 @@ describe('ReprocessDocumentUseCase', () => {
         jobId: initialJob.jobId,
         reason: 'model update'
       },
-      actor
+      actor,
+      'trace-reprocess-success'
     );
 
     expect(response.jobId).not.toBe(initialJob.jobId);
@@ -507,5 +574,173 @@ describe('ReprocessDocumentUseCase', () => {
       }
     ]);
     expect(context.publisher.messages).toHaveLength(2);
+  });
+});
+
+describe('ReplayDeadLetterUseCase', () => {
+  const buildDeadLetterRecord = (overrides: Partial<{
+    dlqEventId: string;
+    jobId: string;
+    attemptId: string;
+    traceId: string;
+    replayedAt: Date;
+  }> = {}) => ({
+    dlqEventId: overrides.dlqEventId ?? 'dlq-1',
+    jobId: overrides.jobId ?? 'job-1',
+    attemptId: overrides.attemptId ?? 'attempt-1',
+    traceId: overrides.traceId ?? 'trace-dlq-source',
+    queueName: 'document-processing.requested',
+    reasonCode: 'DLQ_ERROR',
+    reasonMessage: 'retries exhausted',
+    retryCount: 3,
+    payloadSnapshot: {
+      jobId: overrides.jobId ?? 'job-1',
+      attemptId: overrides.attemptId ?? 'attempt-1'
+    },
+    firstSeenAt: new Date('2026-03-25T12:00:00.000Z'),
+    lastSeenAt: new Date('2026-03-25T12:00:00.000Z'),
+    replayedAt: overrides.replayedAt,
+    retentionUntil: new Date('2026-09-21T12:00:00.000Z')
+  });
+
+  it('creates a new queued replay job and marks the dead letter as replayed only after publish', async () => {
+    const context = createSubmitDocumentUseCase();
+    const actor = buildActor();
+    const sourceJob = await context.useCase.execute(
+      {
+        file: buildUploadedFile(),
+        requestedMode: 'STANDARD',
+        forceReprocess: false
+      },
+      actor,
+      'trace-replay-source'
+    );
+    const [attempt] = await context.attempts.listByJobId(sourceJob.jobId);
+    await context.deadLetters.save(
+      buildDeadLetterRecord({
+        jobId: sourceJob.jobId,
+        attemptId: attempt.attemptId
+      })
+    );
+
+    const response = await createReplayDeadLetterUseCase(context).execute(
+      {
+        dlqEventId: 'dlq-1',
+        reason: 'manual replay'
+      },
+      actor,
+      'trace-replay-success'
+    );
+
+    expect(response.jobId).not.toBe(sourceJob.jobId);
+    expect(await context.jobs.findById(response.jobId)).toMatchObject({
+      status: JobStatus.QUEUED,
+      reprocessOfJobId: sourceJob.jobId
+    });
+    await expect(context.deadLetters.findById('dlq-1')).resolves.toMatchObject({
+      replayedAt: expect.any(Date)
+    });
+    expect((context.publisher.messages ?? []).at(-1)).toMatchObject({
+      jobId: response.jobId,
+      traceId: 'trace-replay-success'
+    });
+  });
+
+  it('returns NOT_FOUND when the dead letter does not exist', async () => {
+    const context = createSubmitDocumentUseCase();
+
+    await expect(
+      createReplayDeadLetterUseCase(context).execute(
+        {
+          dlqEventId: 'missing-dlq',
+          reason: 'manual replay'
+        },
+        buildActor(),
+        'trace-replay-missing'
+      )
+    ).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it('returns VALIDATION_ERROR when the dead letter was already replayed', async () => {
+    const context = createSubmitDocumentUseCase();
+    const actor = buildActor();
+    const sourceJob = await context.useCase.execute(
+      {
+        file: buildUploadedFile(),
+        requestedMode: 'STANDARD',
+        forceReprocess: false
+      },
+      actor,
+      'trace-replay-already-source'
+    );
+    const [attempt] = await context.attempts.listByJobId(sourceJob.jobId);
+    await context.deadLetters.save(
+      buildDeadLetterRecord({
+        jobId: sourceJob.jobId,
+        attemptId: attempt.attemptId,
+        replayedAt: new Date('2026-03-26T12:00:00.000Z')
+      })
+    );
+
+    await expect(
+      createReplayDeadLetterUseCase(context).execute(
+        {
+          dlqEventId: 'dlq-1',
+          reason: 'manual replay'
+        },
+        actor,
+        'trace-replay-already'
+      )
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it('keeps dead_letter_events unreplayed when the replay publish fails', async () => {
+    let publishCount = 0;
+    const publisher = {
+      messages: [] as unknown[],
+      async publishRequested(message: unknown): Promise<void> {
+        publishCount += 1;
+        if (publishCount > 1) {
+          throw new Error('rabbitmq unavailable');
+        }
+        this.messages.push(message);
+      },
+      async publishRetry(): Promise<void> {
+        return;
+      }
+    };
+    const context = createSubmitDocumentUseCase({ publisher });
+    const actor = buildActor();
+    const sourceJob = await context.useCase.execute(
+      {
+        file: buildUploadedFile(),
+        requestedMode: 'STANDARD',
+        forceReprocess: false
+      },
+      actor,
+      'trace-replay-failure-source'
+    );
+    const [attempt] = await context.attempts.listByJobId(sourceJob.jobId);
+    await context.deadLetters.save(
+      buildDeadLetterRecord({
+        jobId: sourceJob.jobId,
+        attemptId: attempt.attemptId
+      })
+    );
+
+    await expect(
+      createReplayDeadLetterUseCase(context).execute(
+        {
+          dlqEventId: 'dlq-1',
+          reason: 'manual replay'
+        },
+        actor,
+        'trace-replay-failure'
+      )
+    ).rejects.toBeInstanceOf(TransientFailureError);
+
+    await expect(context.deadLetters.findById('dlq-1')).resolves.toMatchObject({
+      replayedAt: undefined
+    });
   });
 });

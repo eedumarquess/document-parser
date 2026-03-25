@@ -2,8 +2,12 @@ import {
   DEFAULT_OUTPUT_VERSION,
   DEFAULT_PIPELINE_VERSION,
   ExtractionWarning,
+  InMemoryLoggingAdapter,
+  InMemoryMetricsAdapter,
+  InMemoryTracingAdapter,
   JobStatus,
   NotFoundError,
+  RedactionPolicyService,
   Role
 } from '@document-parser/shared-kernel';
 import { FixedClock, IncrementalIdGenerator, buildActor } from '@document-parser/testkit';
@@ -16,6 +20,7 @@ import {
 import { GetJobStatusUseCase } from '../../src/application/use-cases/get-job-status.use-case';
 import { GetProcessingResultUseCase } from '../../src/application/use-cases/get-processing-result.use-case';
 import type { ProcessingJobRecord, ProcessingResultRecord } from '../../src/contracts/models';
+import { RetentionPolicyService } from '../../src/domain/services/retention-policy.service';
 
 const baseDate = new Date('2026-03-25T12:00:00.000Z');
 
@@ -81,7 +86,8 @@ const buildResultRecord = (overrides: Partial<ProcessingResultRecord> = {}): Pro
     normalizationVersion: overrides.normalizationVersion,
     sourceJobId: overrides.sourceJobId,
     createdAt,
-    updatedAt: overrides.updatedAt ?? createdAt
+    updatedAt: overrides.updatedAt ?? createdAt,
+    retentionUntil: overrides.retentionUntil ?? new Date('2026-06-23T12:00:00.000Z')
   };
 };
 
@@ -92,13 +98,44 @@ const createResultDeliveryContext = () => {
   const jobs = new InMemoryProcessingJobRepository();
   const results = new InMemoryProcessingResultRepository();
   const audit = new InMemoryAuditRepository();
+  const logging = new InMemoryLoggingAdapter();
+  const metrics = new InMemoryMetricsAdapter();
+  const tracing = new InMemoryTracingAdapter();
+  const retentionPolicy = new RetentionPolicyService();
+  const redactionPolicy = new RedactionPolicyService();
 
   return {
     audit,
+    logging,
+    metrics,
+    tracing,
     jobs,
     results,
-    getJobStatus: new GetJobStatusUseCase(authorization, jobs),
-    getProcessingResult: new GetProcessingResultUseCase(authorization, clock, idGenerator, jobs, results, audit)
+    getJobStatus: new GetJobStatusUseCase(
+      authorization,
+      clock,
+      idGenerator,
+      jobs,
+      audit,
+      logging,
+      metrics,
+      tracing,
+      retentionPolicy,
+      redactionPolicy
+    ),
+    getProcessingResult: new GetProcessingResultUseCase(
+      authorization,
+      clock,
+      idGenerator,
+      jobs,
+      results,
+      audit,
+      logging,
+      metrics,
+      tracing,
+      retentionPolicy,
+      redactionPolicy
+    )
   };
 };
 
@@ -112,7 +149,7 @@ describe('GetJobStatusUseCase', () => {
     });
     await context.jobs.save(job);
 
-    const response = await context.getJobStatus.execute({ jobId: job.jobId }, buildActor());
+    const response = await context.getJobStatus.execute({ jobId: job.jobId }, buildActor(), 'trace-status-owner');
 
     expect(response).toEqual({
       jobId: 'job-owner',
@@ -128,6 +165,17 @@ describe('GetJobStatusUseCase', () => {
       ['createdAt', 'documentId', 'jobId', 'outputVersion', 'pipelineVersion', 'requestedMode', 'reusedResult', 'status'].sort()
     );
     expectNoTemplateFields(response);
+    await expect(context.audit.list()).resolves.toEqual([
+      expect.objectContaining({
+        eventType: 'JOB_STATUS_QUERIED',
+        traceId: 'trace-status-owner',
+        metadata: {
+          jobId: 'job-owner',
+          documentId: 'doc-owner',
+          status: JobStatus.COMPLETED
+        }
+      })
+    ]);
   });
 
   it('allows OPERATOR to read a reused result job', async () => {
@@ -140,7 +188,11 @@ describe('GetJobStatusUseCase', () => {
     });
     await context.jobs.save(job);
 
-    const response = await context.getJobStatus.execute({ jobId: job.jobId }, buildActor({ role: Role.OPERATOR }));
+    const response = await context.getJobStatus.execute(
+      { jobId: job.jobId },
+      buildActor({ role: Role.OPERATOR }),
+      'trace-status-operator'
+    );
 
     expect(response).toEqual({
       jobId: 'job-reused',
@@ -157,7 +209,7 @@ describe('GetJobStatusUseCase', () => {
 
   it('returns NOT_FOUND when the job does not exist', async () => {
     const context = createResultDeliveryContext();
-    const promise = context.getJobStatus.execute({ jobId: 'missing-job' }, buildActor());
+    const promise = context.getJobStatus.execute({ jobId: 'missing-job' }, buildActor(), 'trace-status-missing');
 
     await expect(promise).rejects.toBeInstanceOf(NotFoundError);
     await expect(promise).rejects.toMatchObject({
@@ -185,7 +237,7 @@ describe('GetProcessingResultUseCase', () => {
     await context.jobs.save(job);
     await context.results.save(result);
 
-    const response = await context.getProcessingResult.execute({ jobId: job.jobId }, actor);
+    const response = await context.getProcessingResult.execute({ jobId: job.jobId }, actor, 'trace-result-success');
 
     expect(response).toEqual({
       jobId: 'job-result',
@@ -206,6 +258,7 @@ describe('GetProcessingResultUseCase', () => {
     await expect(context.audit.list()).resolves.toEqual([
       expect.objectContaining({
         eventType: 'RESULT_QUERIED',
+        traceId: 'trace-result-success',
         actor,
         metadata: {
           jobId: 'job-result',
@@ -213,6 +266,12 @@ describe('GetProcessingResultUseCase', () => {
         }
       })
     ]);
+    expect(context.logging.entries.at(-1)).toMatchObject({
+      traceId: 'trace-result-success',
+      data: expect.objectContaining({
+        payload: '[REDACTED]'
+      })
+    });
   });
 
   it('returns PARTIAL with warnings when the persisted result is incomplete', async () => {
@@ -233,7 +292,11 @@ describe('GetProcessingResultUseCase', () => {
     await context.jobs.save(job);
     await context.results.save(result);
 
-    const response = await context.getProcessingResult.execute({ jobId: job.jobId }, buildActor());
+    const response = await context.getProcessingResult.execute(
+      { jobId: job.jobId },
+      buildActor(),
+      'trace-result-partial'
+    );
 
     expect(response).toEqual({
       jobId: 'job-partial',
@@ -253,7 +316,8 @@ describe('GetProcessingResultUseCase', () => {
     const context = createResultDeliveryContext();
     const promise = context.getProcessingResult.execute(
       { jobId: 'missing-job' },
-      buildActor({ role: Role.OPERATOR })
+      buildActor({ role: Role.OPERATOR }),
+      'trace-result-missing-job'
     );
 
     await expect(promise).rejects.toBeInstanceOf(NotFoundError);
@@ -275,7 +339,8 @@ describe('GetProcessingResultUseCase', () => {
     await context.jobs.save(job);
     const promise = context.getProcessingResult.execute(
       { jobId: job.jobId },
-      buildActor({ role: Role.OPERATOR })
+      buildActor({ role: Role.OPERATOR }),
+      'trace-result-missing-result'
     );
 
     await expect(promise).rejects.toBeInstanceOf(NotFoundError);
