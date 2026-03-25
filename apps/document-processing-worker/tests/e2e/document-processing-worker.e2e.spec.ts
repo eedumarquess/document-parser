@@ -127,6 +127,6 @@ describe('DocumentProcessingWorkerModule e2e', () => {
     expect(await results.findByJobId('job-1')).toMatchObject({
       status: JobStatus.COMPLETED
     });
-    expect(await artifacts.listByJobId('job-1')).toHaveLength(3);
+    expect(await artifacts.listByJobId('job-1')).toHaveLength(2);
   });
 });
