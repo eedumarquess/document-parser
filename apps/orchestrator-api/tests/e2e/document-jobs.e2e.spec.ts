@@ -20,6 +20,13 @@ import {
 } from '../../src/adapters/out/repositories/in-memory.repositories';
 import { InMemoryBinaryStorageAdapter } from '../../src/adapters/out/storage/in-memory-binary-storage.adapter';
 
+const expectNoTemplateFields = (payload: Record<string, unknown>) => {
+  expect(payload).not.toHaveProperty('templateId');
+  expect(payload).not.toHaveProperty('templateVersion');
+  expect(payload).not.toHaveProperty('templateStatus');
+  expect(payload).not.toHaveProperty('matchingRules');
+};
+
 describe('Document jobs e2e', () => {
   let app: INestApplication;
   let audit: InMemoryAuditRepository;
@@ -125,10 +132,18 @@ describe('Document jobs e2e', () => {
 
     expect(createResponse.status).toBe(201);
     expect(createResponse.body.status).toBe('QUEUED');
+    expect(Object.keys(createResponse.body).sort()).toEqual(
+      ['createdAt', 'documentId', 'jobId', 'outputVersion', 'pipelineVersion', 'requestedMode', 'reusedResult', 'status'].sort()
+    );
+    expectNoTemplateFields(createResponse.body);
 
     const statusResponse = await waitForJobStatus(createResponse.body.jobId, 'COMPLETED');
 
     expect(statusResponse.body.status).toBe('COMPLETED');
+    expect(Object.keys(statusResponse.body).sort()).toEqual(
+      ['createdAt', 'documentId', 'jobId', 'outputVersion', 'pipelineVersion', 'requestedMode', 'reusedResult', 'status'].sort()
+    );
+    expectNoTemplateFields(statusResponse.body);
 
     const resultResponse = await request(app.getHttpServer())
       .get(`/v1/parsing/jobs/${createResponse.body.jobId}/result`)
@@ -144,6 +159,10 @@ describe('Document jobs e2e', () => {
       outputVersion: '1.0.0',
       payload: expect.stringContaining('conteudo extraido')
     });
+    expect(Object.keys(resultResponse.body).sort()).toEqual(
+      ['confidence', 'documentId', 'jobId', 'outputVersion', 'payload', 'pipelineVersion', 'requestedMode', 'status', 'warnings'].sort()
+    );
+    expectNoTemplateFields(resultResponse.body);
   });
 
   it('returns PARTIAL with [ilegivel] when the pipeline marks content as illegible', async () => {
@@ -163,6 +182,7 @@ describe('Document jobs e2e', () => {
 
     expect(resultResponse.body.status).toBe('PARTIAL');
     expect(resultResponse.body.payload).toContain('[ilegivel]');
+    expectNoTemplateFields(resultResponse.body);
   });
 
   it('returns the validation error envelope when the upload is missing', async () => {

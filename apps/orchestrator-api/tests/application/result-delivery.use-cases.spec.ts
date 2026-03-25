@@ -19,6 +19,13 @@ import type { ProcessingJobRecord, ProcessingResultRecord } from '../../src/cont
 
 const baseDate = new Date('2026-03-25T12:00:00.000Z');
 
+const expectNoTemplateFields = (payload: Record<string, unknown>) => {
+  expect(payload).not.toHaveProperty('templateId');
+  expect(payload).not.toHaveProperty('templateVersion');
+  expect(payload).not.toHaveProperty('templateStatus');
+  expect(payload).not.toHaveProperty('matchingRules');
+};
+
 const buildJobRecord = (overrides: Partial<ProcessingJobRecord> = {}): ProcessingJobRecord => {
   const createdAt = overrides.createdAt ?? baseDate;
 
@@ -105,7 +112,9 @@ describe('GetJobStatusUseCase', () => {
     });
     await context.jobs.save(job);
 
-    await expect(context.getJobStatus.execute({ jobId: job.jobId }, buildActor())).resolves.toEqual({
+    const response = await context.getJobStatus.execute({ jobId: job.jobId }, buildActor());
+
+    expect(response).toEqual({
       jobId: 'job-owner',
       documentId: 'doc-owner',
       status: JobStatus.COMPLETED,
@@ -115,6 +124,10 @@ describe('GetJobStatusUseCase', () => {
       reusedResult: false,
       createdAt: baseDate.toISOString()
     });
+    expect(Object.keys(response).sort()).toEqual(
+      ['createdAt', 'documentId', 'jobId', 'outputVersion', 'pipelineVersion', 'requestedMode', 'reusedResult', 'status'].sort()
+    );
+    expectNoTemplateFields(response);
   });
 
   it('allows OPERATOR to read a reused result job', async () => {
@@ -127,9 +140,9 @@ describe('GetJobStatusUseCase', () => {
     });
     await context.jobs.save(job);
 
-    await expect(
-      context.getJobStatus.execute({ jobId: job.jobId }, buildActor({ role: Role.OPERATOR }))
-    ).resolves.toEqual({
+    const response = await context.getJobStatus.execute({ jobId: job.jobId }, buildActor({ role: Role.OPERATOR }));
+
+    expect(response).toEqual({
       jobId: 'job-reused',
       documentId: 'doc-reused',
       status: JobStatus.PARTIAL,
@@ -139,6 +152,7 @@ describe('GetJobStatusUseCase', () => {
       reusedResult: true,
       createdAt: baseDate.toISOString()
     });
+    expectNoTemplateFields(response);
   });
 
   it('returns NOT_FOUND when the job does not exist', async () => {
@@ -171,7 +185,9 @@ describe('GetProcessingResultUseCase', () => {
     await context.jobs.save(job);
     await context.results.save(result);
 
-    await expect(context.getProcessingResult.execute({ jobId: job.jobId }, actor)).resolves.toEqual({
+    const response = await context.getProcessingResult.execute({ jobId: job.jobId }, actor);
+
+    expect(response).toEqual({
       jobId: 'job-result',
       documentId: 'doc-result',
       status: JobStatus.COMPLETED,
@@ -182,6 +198,10 @@ describe('GetProcessingResultUseCase', () => {
       warnings: [],
       payload: 'texto consolidado'
     });
+    expect(Object.keys(response).sort()).toEqual(
+      ['confidence', 'documentId', 'jobId', 'outputVersion', 'payload', 'pipelineVersion', 'requestedMode', 'status', 'warnings'].sort()
+    );
+    expectNoTemplateFields(response);
 
     await expect(context.audit.list()).resolves.toEqual([
       expect.objectContaining({
@@ -213,7 +233,9 @@ describe('GetProcessingResultUseCase', () => {
     await context.jobs.save(job);
     await context.results.save(result);
 
-    await expect(context.getProcessingResult.execute({ jobId: job.jobId }, buildActor())).resolves.toEqual({
+    const response = await context.getProcessingResult.execute({ jobId: job.jobId }, buildActor());
+
+    expect(response).toEqual({
       jobId: 'job-partial',
       documentId: 'doc-partial',
       status: JobStatus.PARTIAL,
@@ -224,6 +246,7 @@ describe('GetProcessingResultUseCase', () => {
       warnings: [ExtractionWarning.ILLEGIBLE_CONTENT],
       payload: 'Paciente consciente. Observacao manuscrita: [ilegivel].'
     });
+    expectNoTemplateFields(response);
   });
 
   it('returns NOT_FOUND when the job does not exist', async () => {

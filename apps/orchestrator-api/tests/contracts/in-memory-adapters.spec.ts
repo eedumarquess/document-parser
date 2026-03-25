@@ -2,6 +2,13 @@ import { InMemoryJobPublisherAdapter } from '../../src/adapters/out/queue/in-mem
 import { InMemoryBinaryStorageAdapter } from '../../src/adapters/out/storage/in-memory-binary-storage.adapter';
 import { SimplePageCounterAdapter } from '../../src/adapters/out/storage/simple-page-counter.adapter';
 
+const expectNoTemplateFields = (payload: Record<string, unknown>) => {
+  expect(payload).not.toHaveProperty('templateId');
+  expect(payload).not.toHaveProperty('templateVersion');
+  expect(payload).not.toHaveProperty('templateStatus');
+  expect(payload).not.toHaveProperty('matchingRules');
+};
+
 describe('In-memory adapter contracts', () => {
   it('stores and retrieves the original binary without mutation', async () => {
     const storage = new InMemoryBinaryStorageAdapter();
@@ -43,6 +50,10 @@ describe('In-memory adapter contracts', () => {
         publishedAt: '2026-03-25T12:00:00.000Z'
       }
     ]);
+    expect(Object.keys(publisher.messages[0]).sort()).toEqual(
+      ['attemptId', 'documentId', 'jobId', 'pipelineVersion', 'publishedAt', 'requestedMode'].sort()
+    );
+    expectNoTemplateFields(publisher.messages[0] as Record<string, unknown>);
     expect(received).toEqual(['job-1']);
   });
 
@@ -74,6 +85,10 @@ describe('In-memory adapter contracts', () => {
         retryAttempt: 2
       }
     ]);
+    expect(Object.keys(publisher.retryMessages[0].message).sort()).toEqual(
+      ['attemptId', 'documentId', 'jobId', 'pipelineVersion', 'publishedAt', 'requestedMode'].sort()
+    );
+    expectNoTemplateFields(publisher.retryMessages[0].message as Record<string, unknown>);
   });
 
   it('counts PDF pages from the uploaded binary', async () => {
