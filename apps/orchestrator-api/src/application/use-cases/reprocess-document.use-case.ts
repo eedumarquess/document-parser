@@ -114,10 +114,15 @@ export class ReprocessDocumentUseCase {
             message: 'Reprocessing job queued successfully',
             context: 'ReprocessDocumentUseCase',
             traceId,
-            data: this.redactionPolicy.redact({
-              jobId: derived.queuedJob.jobId,
-              reprocessOfJobId: originalJob.jobId
-            }),
+            data: this.redactionPolicy.redact(
+              {
+                jobId: derived.queuedJob.jobId,
+                reprocessOfJobId: originalJob.jobId
+              },
+              {
+                context: 'log'
+              }
+            ),
             recordedAt: now
           });
           await this.metrics.increment({
@@ -136,11 +141,16 @@ export class ReprocessDocumentUseCase {
             message: 'Reprocessing job failed',
             context: 'ReprocessDocumentUseCase',
             traceId,
-            data: this.redactionPolicy.redact({
-              actorId: actor.actorId,
-              jobId: command.jobId,
-              errorMessage: error instanceof Error ? error.message : 'Unexpected failure'
-            }),
+            data: this.redactionPolicy.redact(
+              {
+                actorId: actor.actorId,
+                jobId: command.jobId,
+                errorMessage: error instanceof Error ? error.message : 'Unexpected failure'
+              },
+              {
+                context: 'log'
+              }
+            ),
             recordedAt: this.clock.now()
           });
           throw error;

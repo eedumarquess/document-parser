@@ -129,11 +129,16 @@ export class ReplayDeadLetterUseCase {
             message: 'Dead letter replay queued successfully',
             context: 'ReplayDeadLetterUseCase',
             traceId,
-            data: this.redactionPolicy.redact({
-              dlqEventId: deadLetter.dlqEventId,
-              jobId: derived.queuedJob.jobId,
-              sourceJobId: originalJob.jobId
-            }),
+            data: this.redactionPolicy.redact(
+              {
+                dlqEventId: deadLetter.dlqEventId,
+                jobId: derived.queuedJob.jobId,
+                sourceJobId: originalJob.jobId
+              },
+              {
+                context: 'log'
+              }
+            ),
             recordedAt: now
           });
           await this.metrics.increment({
@@ -152,11 +157,16 @@ export class ReplayDeadLetterUseCase {
             message: 'Dead letter replay failed',
             context: 'ReplayDeadLetterUseCase',
             traceId,
-            data: this.redactionPolicy.redact({
-              actorId: actor.actorId,
-              dlqEventId: command.dlqEventId,
-              errorMessage: error instanceof Error ? error.message : 'Unexpected failure'
-            }),
+            data: this.redactionPolicy.redact(
+              {
+                actorId: actor.actorId,
+                dlqEventId: command.dlqEventId,
+                errorMessage: error instanceof Error ? error.message : 'Unexpected failure'
+              },
+              {
+                context: 'log'
+              }
+            ),
             recordedAt: this.clock.now()
           });
           throw error;

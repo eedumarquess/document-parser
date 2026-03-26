@@ -146,16 +146,21 @@ export class SubmitDocumentUseCase {
 
             await this.logging.log({
               level: 'info',
-              message: 'Document submission reused a compatible result',
-              context: 'SubmitDocumentUseCase',
-              traceId,
-              data: this.redactionPolicy.redact({
+            message: 'Document submission reused a compatible result',
+            context: 'SubmitDocumentUseCase',
+            traceId,
+            data: this.redactionPolicy.redact(
+              {
                 jobId: response.jobId,
                 documentId: response.documentId,
                 reusedResult: response.reusedResult
-              }),
-              recordedAt: now
-            });
+              },
+              {
+                context: 'log'
+              }
+            ),
+            recordedAt: now
+          });
             await this.metrics.increment({
               name: 'orchestrator.submit_document.reused_result',
               traceId
@@ -226,11 +231,16 @@ export class SubmitDocumentUseCase {
             message: 'Document submission queued successfully',
             context: 'SubmitDocumentUseCase',
             traceId,
-            data: this.redactionPolicy.redact({
-              jobId: queuedJob.jobId,
-              documentId: queuedJob.documentId,
-              requestedMode: queuedJob.requestedMode
-            }),
+            data: this.redactionPolicy.redact(
+              {
+                jobId: queuedJob.jobId,
+                documentId: queuedJob.documentId,
+                requestedMode: queuedJob.requestedMode
+              },
+              {
+                context: 'log'
+              }
+            ),
             recordedAt: now
           });
           await this.metrics.increment({
@@ -249,11 +259,16 @@ export class SubmitDocumentUseCase {
             message: 'Document submission failed',
             context: 'SubmitDocumentUseCase',
             traceId,
-            data: this.redactionPolicy.redact({
-              actorId: actor.actorId,
-              requestedMode: command.requestedMode,
-              errorMessage: error instanceof Error ? error.message : 'Unexpected failure'
-            }),
+            data: this.redactionPolicy.redact(
+              {
+                actorId: actor.actorId,
+                requestedMode: command.requestedMode,
+                errorMessage: error instanceof Error ? error.message : 'Unexpected failure'
+              },
+              {
+                context: 'log'
+              }
+            ),
             recordedAt: this.clock.now()
           });
           throw error;
