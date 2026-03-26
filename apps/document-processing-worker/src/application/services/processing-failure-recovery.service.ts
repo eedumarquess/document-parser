@@ -227,7 +227,9 @@ export class ProcessingFailureRecoveryService {
         reasonCode: ErrorCode.FATAL_FAILURE,
         reasonMessage,
         retryCount: input.partialContext.attempt?.attemptNumber ?? 0,
-        payloadSnapshot: this.redactionPolicy.redact(payloadSnapshot) as Record<string, unknown>,
+        payloadSnapshot: this.redactionPolicy.redact(payloadSnapshot, {
+          context: 'dead_letter'
+        }) as Record<string, unknown>,
         firstSeenAt: input.now,
         lastSeenAt: input.now,
         retentionUntil: this.retentionPolicy.calculateDeadLetterRetentionUntil(input.now)
@@ -266,7 +268,9 @@ export class ProcessingFailureRecoveryService {
       queueName: input.job.queueName,
       reasonCode: input.reasonCode,
       reasonMessage: input.reasonMessage,
-      payloadSnapshot: this.redactionPolicy.redact(input.payloadSnapshot),
+      payloadSnapshot: this.redactionPolicy.redact(input.payloadSnapshot, {
+        context: 'dead_letter'
+      }),
       deadLetterEventId: this.idGenerator.next('dlq'),
       retentionUntil: this.retentionPolicy.calculateDeadLetterRetentionUntil(input.now),
       now: input.now

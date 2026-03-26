@@ -59,11 +59,16 @@ export class ProcessJobMessageUseCase {
             message: 'Processing completed successfully',
             context: 'ProcessJobMessageUseCase',
             traceId: message.traceId,
-            data: this.redactionPolicy.redact({
-              jobId: execution.context.job.jobId,
-              attemptId: execution.context.attempt.attemptId,
-              status: execution.outcome.status
-            }) as Record<string, unknown>,
+            data: this.redactionPolicy.redact(
+              {
+                jobId: execution.context.job.jobId,
+                attemptId: execution.context.attempt.attemptId,
+                status: execution.outcome.status
+              },
+              {
+                context: 'log'
+              }
+            ) as Record<string, unknown>,
             recordedAt: completedAt
           });
           await this.metrics.increment({
@@ -84,10 +89,15 @@ export class ProcessJobMessageUseCase {
                 message: 'Processing failed and retry was scheduled',
                 context: 'ProcessJobMessageUseCase',
                 traceId: message.traceId,
-                data: this.redactionPolicy.redact({
-                  jobId: context?.job.jobId ?? message.jobId,
-                  attemptId: context?.attempt.attemptId ?? message.attemptId
-                }) as Record<string, unknown>,
+                data: this.redactionPolicy.redact(
+                  {
+                    jobId: context?.job.jobId ?? message.jobId,
+                    attemptId: context?.attempt.attemptId ?? message.attemptId
+                  },
+                  {
+                    context: 'log'
+                  }
+                ) as Record<string, unknown>,
                 recordedAt: this.clock.now()
               });
               await this.metrics.increment({
@@ -109,16 +119,21 @@ export class ProcessJobMessageUseCase {
                   : 'Processing moved to dead letter',
               context: 'ProcessJobMessageUseCase',
               traceId: message.traceId,
-              data: this.redactionPolicy.redact({
-                jobId: context?.job.jobId ?? message.jobId,
-                attemptId: context?.attempt.attemptId ?? message.attemptId,
-                documentId: context?.document.documentId ?? message.documentId,
-                missingResources:
-                  handledError instanceof IncompleteProcessingContextError
-                    ? handledError.missingResources
-                    : undefined,
-                errorMessage: handledError instanceof Error ? handledError.message : 'Unexpected failure'
-              }) as Record<string, unknown>,
+              data: this.redactionPolicy.redact(
+                {
+                  jobId: context?.job.jobId ?? message.jobId,
+                  attemptId: context?.attempt.attemptId ?? message.attemptId,
+                  documentId: context?.document.documentId ?? message.documentId,
+                  missingResources:
+                    handledError instanceof IncompleteProcessingContextError
+                      ? handledError.missingResources
+                      : undefined,
+                  errorMessage: handledError instanceof Error ? handledError.message : 'Unexpected failure'
+                },
+                {
+                  context: 'log'
+                }
+              ) as Record<string, unknown>,
               recordedAt: this.clock.now()
             });
             throw handledError;
