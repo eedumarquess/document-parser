@@ -65,7 +65,7 @@ O contrato externo do MVP e minimo. A resposta final contem:
 - `MongoDB`: metadados, jobs, resultados, artefatos e auditoria
 - `MinIO`: arquivo original e artefatos derivados
 - `RabbitMQ`: fila principal, retry e DLQ
-- `Datadog` ou equivalente: metricas, logs estruturados e traces
+- `OpenTelemetry` via `OTLP/HTTP` ou adapters locais: metricas, logs estruturados e traces
 
 ### Fluxo ponta a ponta
 
@@ -102,6 +102,31 @@ O repositorio ja contem:
 - `packages/testkit` com builders, fakes, clock fixo e helpers de teste
 - estrutura hexagonal em ambos os servicos
 - suites `domain`, `application`, `contracts` e `e2e`
+
+## Hardening operacional atual
+
+O estado atual do repositorio ja inclui os pilares principais da fase 3:
+
+- observabilidade via `LoggingPort`, `MetricsPort` e `TracingPort`, com adapters locais por default e export opcional via `OTLP/HTTP`
+- `RedactionPolicyService` centralizado para `audit`, `log`, `dead_letter` e `artifact`, com redacao por chave e por conteudo sensivel
+- timeout, limite de concorrencia e retry nos adapters LLM remotos
+- suites reais de infraestrutura com `testcontainers`, protegidas por `RUN_REAL_INFRA_TESTS=true`
+
+### Variaveis operacionais relevantes
+
+Observabilidade:
+
+- `OBSERVABILITY_MODE=local|otlp`
+- `OTEL_EXPORTER_OTLP_ENDPOINT`
+- `OTEL_EXPORTER_OTLP_HEADERS`
+- `OTEL_SERVICE_NAME`
+
+Fallback LLM remoto:
+
+- `LLM_REQUEST_TIMEOUT_MS`
+- `LLM_MAX_CONCURRENCY`
+- `LLM_MAX_RETRIES`
+- `LLM_RETRY_BASE_DELAY_MS`
 
 ## API inicial
 

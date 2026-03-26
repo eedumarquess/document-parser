@@ -4,6 +4,49 @@ Todas as mudancas relevantes deste repositorio devem ser registradas aqui.
 
 O formato segue uma adaptacao simples de `Keep a Changelog` e usa as tags de contexto dos commits como apoio para rastreabilidade.
 
+## [2026-03-25] - Hardening operacional da fase 3
+
+### Added
+
+- Executor remoto comum para fallback LLM no worker, com timeout por request, concorrencia limitada, retry com backoff e degradacao por target quando o provider externo falha.
+- Backend opcional de observabilidade via `OTLP/HTTP` no `shared-kernel`, preservando os adapters locais como fallback de runtime.
+- Suite real de contratos do `document-processing-worker` com `testcontainers`, cobrindo sucesso ponta a ponta, retry, DLQ terminal e verificacao de indices TTL/operacionais.
+- Novos testes de dominio para export `OTLP`, politicas de redacao e fallback de configuracao de observabilidade.
+
+### Changed
+
+- `OpenRouterLlmExtractionAdapter` e `HuggingFaceLlmExtractionAdapter` passaram a usar a mesma politica de execucao remota, respeitando `LLM_REQUEST_TIMEOUT_MS`, `LLM_MAX_CONCURRENCY`, `LLM_MAX_RETRIES` e `LLM_RETRY_BASE_DELAY_MS`.
+- `RedactionPolicyService` foi endurecido para operar por contexto (`audit`, `log`, `dead_letter`, `artifact`) e para bloquear tanto chaves sensiveis quanto conteudo livre com email, telefone, `cpf`, `cnpj`, `cep` e tokens.
+- Casos de uso e gravadores de auditoria da API e do worker passaram a persistir `metadata` saneado e `redactedPayload` coerente em auditoria, logs operacionais e snapshots de DLQ.
+- O bootstrap de runtime dos dois servicos passou a aceitar `OBSERVABILITY_MODE=local|otlp`, com fallback automatico para o modo local quando a configuracao OTLP estiver ausente ou invalida.
+- `README.md` e `docs/ddd/06-audit-observability.md` foram realinhados ao estado real do codigo apos a fase 3.
+
+### Fixed
+
+- O fallback LLM remoto deixou de depender de requests sem timeout e sem limite de paralelismo, reduzindo risco de travamento ou explosao de chamadas simultaneas.
+- Logs, eventos de auditoria e payloads de falha passaram a bloquear persistencia acidental de texto bruto, prompt, resposta de LLM e identificadores sensiveis.
+- O runtime de observabilidade passou a cair de volta com seguranca para os adapters locais quando o modo `otlp` estiver mal configurado.
+- A cobertura de testes passou a proteger explicitamente retry transitorio, timeout, erro nao retryavel e export observavel para collector HTTP.
+
+### Technical Notes
+
+- A suite real do worker continua opt-in e so roda com `RUN_REAL_INFRA_TESTS=true`.
+- O contrato HTTP dos endpoints e o payload principal de fila nao foram alterados nesta fase.
+- Os gates executados ao final ficaram verdes com `lint`, `typecheck` e `test`.
+
+### Commit Contexts
+
+- `feat(worker-remote-llm-runtime)`
+- `feat(worker-remote-llm-providers)`
+- `feat(shared-operational-observability)`
+- `bug(worker-operational-redaction)`
+- `feat(runtime-observability-bootstrap)`
+- `bug(orchestrator-audit-redaction)`
+- `feat(orchestrator-operational-hardening)`
+- `feat(orchestrator-observability-tests)`
+- `feat(worker-real-infra-tests)`
+- `docs(operational-hardening)`
+
 ## [2026-03-25] - Simplificacao estrutural do orchestrator e worker
 
 ### Added

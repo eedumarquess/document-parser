@@ -2,11 +2,11 @@
 
 ## Objetivo
 
-Documentar a trilha operacional que ja existe no repositorio hoje e separar com clareza o que ja esta implementado em auditoria, retry e DLQ do que ainda e backlog de observabilidade.
+Documentar a trilha operacional realmente implementada no repositorio hoje: auditoria, redacao, correlacao por `traceId`, retry, DLQ e observabilidade via ports com backend local ou `OTLP/HTTP`.
 
 ## Estado atual no codigo
 
-O contexto atual entrega uma base funcional de auditoria e falha operacional, mas ainda nao entrega uma stack completa de observabilidade.
+O contexto atual ja entrega auditoria, retencao, redacao e uma stack de observabilidade vendor-agnostic.
 
 Capacidades realmente implementadas:
 
@@ -15,16 +15,15 @@ Capacidades realmente implementadas:
 - retry dirigido por politica nomeada (`RetryPolicyService`)
 - topologia RabbitMQ com fila principal, filas de retry por TTL e broker DLQ
 - persistencia de estados operacionais em `processing_jobs` e `job_attempts`
-
-Capacidades que ainda nao existem no codigo:
-
 - `LoggingPort`
 - `MetricsPort`
 - `TracingPort`
-- `traceId` nos contratos e eventos de auditoria
-- correlacao distribuida entre API, fila e worker
+- `traceId` em contratos HTTP, publicacao de fila, auditoria e DLQ
+- correlacao entre `orchestrator-api`, `RabbitMQ` e `document-processing-worker`
 - replay manual de `dead_letter_events`
 - politica canonica de retencao para `audit_events`, `dead_letter_events`, `processing_results` e `page_artifacts`
+- redacao centralizada por contexto com `RedactionPolicyService`
+- backend opcional de export via `OTLP/HTTP`, mantendo adapters locais como fallback
 
 ## Modelo persistido atual
 
@@ -34,16 +33,14 @@ Campos realmente persistidos:
 
 - `eventId`
 - `eventType`
+- `aggregateType`
+- `aggregateId`
+- `traceId`
 - `actor`
 - `metadata`
+- `redactedPayload`
 - `createdAt`
-
-Observacoes:
-
-- nao existe `traceId`
-- nao existe `aggregateType`
-- nao existe `aggregateId` dedicado; esses IDs entram em `metadata`
-- nao existe `redactedPayload`
+- `retentionUntil`
 
 ### `DeadLetterRecord`
 
@@ -52,6 +49,7 @@ Campos realmente persistidos:
 - `dlqEventId`
 - `jobId`
 - `attemptId`
+- `traceId`
 - `queueName`
 - `reasonCode`
 - `reasonMessage`
@@ -59,11 +57,8 @@ Campos realmente persistidos:
 - `payloadSnapshot`
 - `firstSeenAt`
 - `lastSeenAt`
-
-Observacoes:
-
-- nao existe `replayedAt`
-- o replay manual ainda nao foi implementado
+- `replayedAt`
+- `retentionUntil`
 
 ## Eventos de auditoria implementados hoje
 
@@ -76,12 +71,11 @@ Eventos gravados:
 - `PROCESSING_JOB_QUEUED`
 - `COMPATIBLE_RESULT_REUSED`
 - `PROCESSING_JOB_QUEUEING_FAILED`
+- `JOB_STATUS_QUERIED`
 - `RESULT_QUERIED`
 - `JOB_REPROCESSING_REQUESTED`
-
-Observacao importante:
-
-- `GET /v1/parsing/jobs/{jobId}` consulta status, mas hoje nao gera auditoria
+- `DEAD_LETTER_REPLAY_REQUESTED`
+- `DEAD_LETTER_REPLAY_COMPLETED`
 
 ### `document-processing-worker`
 
@@ -140,6 +134,22 @@ Fluxo terminal atual:
 - quando a decisao e terminal, persiste `dead_letter_events` e audita `PROCESSING_FAILED`
 - em seguida a mensagem e rejeitada pelo listener com `nack(requeue = false)`, permitindo o roteamento para a DLQ do broker
 
+### Retry intra-provider no fallback LLM remoto
+
+Os adapters remotos de LLM agora aplicam um hardening proprio, independente do retry de job:
+
+- timeout por request com `AbortController`
+- concorrencia limitada por `LLM_MAX_CONCURRENCY`
+- retry com backoff exponencial para falhas transitorias e timeout
+- resposta degradada por target via `LLM_FALLBACK_UNAVAILABLE`, sem derrubar o job inteiro
+
+Configuracao suportada:
+
+- `LLM_REQUEST_TIMEOUT_MS`
+- `LLM_MAX_CONCURRENCY`
+- `LLM_MAX_RETRIES`
+- `LLM_RETRY_BASE_DELAY_MS`
+
 ## Fronteira do contexto hoje
 
 ### `orchestrator-api`
@@ -149,8 +159,10 @@ Responsabilidades implementadas:
 - auditar submissao
 - auditar enfileiramento
 - auditar reaproveitamento de resultado compativel
+- auditar consulta de status
 - auditar consulta de resultado
 - auditar solicitacao de reprocessamento
+- replay manual de DLQ
 
 ### `document-processing-worker`
 
@@ -167,28 +179,36 @@ Responsabilidades implementadas:
 
 ### O que o contexto ja protege
 
-- `AuditEventRecord` grava metadados operacionais simples, nao o payload final completo
+- `AuditEventRecord` grava `metadata` sanitizado e `redactedPayload`
 - `SensitiveDataMaskingService` mascara texto antes de enviar fallback para `LLM` externo
+- `RedactionPolicyService` redige por contexto (`audit`, `log`, `dead_letter`, `artifact`)
+- a redacao tambem cobre deteccao semantica para `email`, `phone`, `cpf`, `cnpj`, `cep` e tokens longos
+- chaves tecnicamente sensiveis como `payload`, `rawText`, `rawPayload`, `promptText`, `responseText`, `buffer` e equivalentes sao sempre colapsadas
+
+### Regras operacionais de redacao
+
+- `metadata` persistido deve privilegiar ids, enums, contagens, versoes e timestamps
+- texto livre e snapshots de erro devem ser saneados antes de log, auditoria ou DLQ
+- artefatos e payloads brutos continuam separados do canal de auditoria
 
 ### O que ainda exige cuidado arquitetural
 
-- nao existe um `RedactionPolicyService` dedicado para auditoria
 - `page_artifacts` podem carregar `rawText`, `rawPayload`, `promptText` e `responseText` em `metadata`
-- a politica de mascaramento atual cobre envio ao `LLM`, nao todo e qualquer registro tecnico interno
-- nao existe stack de logs estruturados no repositorio para aplicar redacao centralizada
+- a exportacao `OTLP/HTTP` atual e simples e nao faz batching, persistencia local ou health-check do collector
+- dashboards, alertas e SLOs ainda nao fazem parte do repositorio
 
 ## Retencao no estado atual
 
-A unica politica de retencao explicitamente implementada no codigo e a do documento original:
+O `RetentionPolicyService` implementa hoje:
 
-- `RetentionPolicyService.calculateOriginalRetentionUntil` define `30 dias` para o binario canonico
+- `30 dias` para documento original
+- `180 dias` para `audit_events`
+- `180 dias` para `dead_letter_events`
+- `90 dias` para `processing_results`
+- `90 dias` para `page_artifacts` do tipo `OCR_JSON`
+- `30 dias` para os demais `page_artifacts`
 
-Ainda nao existe politica implementada para:
-
-- `audit_events`
-- `dead_letter_events`
-- `processing_results`
-- `page_artifacts`
+Os adapters Mongo criam indices TTL para as colecoes com `retentionUntil`.
 
 ## Portas e componentes reais do contexto
 
@@ -200,6 +220,9 @@ Ainda nao existe politica implementada para:
 - `ProcessingJobRepositoryPort`
 - `JobAttemptRepositoryPort`
 - `ProcessingResultRepositoryPort`
+- `LoggingPort`
+- `MetricsPort`
+- `TracingPort`
 - `ClockPort`
 - `UnitOfWorkPort`
 
@@ -212,22 +235,53 @@ Ainda nao existe politica implementada para:
 - `RetryPolicyService`
 - `RabbitMqJobPublisherAdapter`
 - `RabbitMqProcessingJobListener`
+- `ReplayDeadLetterUseCase`
+- `RedactionPolicyService`
+- `RetentionPolicyService`
+- adapters locais de observabilidade
+- adapters `OTLP/HTTP` de observabilidade
 
-## Gaps explicitos para a proxima fase
+## Observabilidade em runtime
 
-- introduzir `traceId` e correlacao ponta a ponta
-- criar telemetria explicita para latencia, throughput e taxa de falha
-- introduzir logging estruturado com redacao centralizada
-- definir politica de retencao para eventos, artefatos e DLQ
-- implementar replay manual de `dead_letter_events`
-- decidir se consulta de status tambem deve gerar auditoria
+Configuracao atual:
+
+- `OBSERVABILITY_MODE=local` usa adapters em memoria/console e preserva o comportamento local
+- `OBSERVABILITY_MODE=otlp` ativa exportacao `OTLP/HTTP`
+- `OTEL_EXPORTER_OTLP_ENDPOINT` define o collector
+- `OTEL_EXPORTER_OTLP_HEADERS` injeta headers extras
+- `OTEL_SERVICE_NAME` sobrescreve o nome do servico
+
+Comportamento de fallback:
+
+- configuracao ausente ou invalida para `otlp` cai de volta nos adapters locais
+- falhas de export nao derrubam os casos de uso
+
+## Suites reais de infraestrutura
+
+As suites de contratos reais usam `testcontainers` e ficam protegidas por `RUN_REAL_INFRA_TESTS=true`.
+
+Cobertura relevante:
+
+- `MongoDB` com indices operacionais e TTL
+- `MinIO` para binario original e artefatos
+- `RabbitMQ` com fila principal, retry e broker DLQ
+- fluxo ponta a ponta do worker, incluindo sucesso, retry e falha terminal
+
+## Gaps explicitos remanescentes
+
+- collector `OTLP` ainda sem batching e retry dedicado do exporter
+- dashboards, alertas e SLOs ainda nao versionados no repositorio
+- consulta analitica de auditoria e DLQ ainda depende das colecoes operacionais
+- propagacao de contexto distribuido usa `traceId` proprio, nao um stack OpenTelemetry completa de headers entre todos os hops
 
 ## Criterio de alinhamento com o repositorio
 
 Este documento estara coerente com o codigo enquanto todos os itens abaixo forem verdadeiros:
 
-- auditoria for representada por `AuditEventRecord` simples
-- observabilidade forte ainda nao estiver implementada via logs, metricas e traces dedicados
+- auditoria for representada por `AuditEventRecord` com `aggregateType`, `aggregateId`, `traceId`, `metadata`, `redactedPayload` e `retentionUntil`
+- observabilidade continuar exposta por `LoggingPort`, `MetricsPort` e `TracingPort`
+- o runtime aceitar `local` e `otlp` com fallback automatico para local
 - retry continuar governado por `RetryPolicyService`
+- os adapters remotos de LLM continuarem com timeout, concorrencia controlada e retry proprio
 - falha terminal continuar produzindo `dead_letter_events` e rejeicao para a DLQ do broker
-- a unica retencao explicita implementada continuar sendo a do documento original
+- a retencao continuar centralizada em `RetentionPolicyService`
