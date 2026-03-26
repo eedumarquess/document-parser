@@ -1,3 +1,7 @@
+import {
+  createOtlpHttpObservabilityAdapters,
+  parseOtlpHeaders
+} from '@document-parser/shared-kernel';
 import { InMemoryAuditRepository, InMemoryDocumentRepository, InMemoryJobAttemptRepository, InMemoryProcessingJobRepository, InMemoryProcessingResultRepository, InMemoryUnitOfWork } from '../adapters/out/repositories/in-memory.repositories';
 import {
   MongoAuditRepositoryAdapter,
@@ -24,6 +28,7 @@ export function buildOrchestratorProviderOverridesFromEnv(): OrchestratorProvide
   if (mode === 'memory') {
     const results = new InMemoryProcessingResultRepository();
     return {
+      ...buildObservabilityOverrides('document-parser-orchestrator-api'),
       storage: new InMemoryBinaryStorageAdapter(),
       documents: new InMemoryDocumentRepository(),
       jobs: new InMemoryProcessingJobRepository(),
@@ -41,6 +46,7 @@ export function buildOrchestratorProviderOverridesFromEnv(): OrchestratorProvide
   const results = new MongoProcessingResultRepositoryAdapter(mongoProvider, sessionContext);
 
   return {
+    ...buildObservabilityOverrides('document-parser-orchestrator-api'),
     storage: new MinioBinaryStorageAdapter({
       endPoint: getRequiredEnv('MINIO_ENDPOINT'),
       port: parseNumberEnv('MINIO_PORT'),
@@ -100,4 +106,29 @@ function parseBooleanEnv(name: string): boolean {
   }
 
   throw new Error(`Environment variable ${name} must be "true" or "false"`);
+}
+
+function buildObservabilityOverrides(serviceName: string) {
+  const mode = (process.env.OBSERVABILITY_MODE ?? 'local').trim().toLowerCase();
+
+  if (mode === '' || mode === 'local') {
+    return {};
+  }
+
+  if (mode !== 'otlp') {
+    console.warn(`Unsupported OBSERVABILITY_MODE "${mode}". Falling back to local adapters.`);
+    return {};
+  }
+
+  const endpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim();
+  if (endpoint === undefined || endpoint === '') {
+    console.warn('Missing OTEL_EXPORTER_OTLP_ENDPOINT. Falling back to local adapters.');
+    return {};
+  }
+
+  return createOtlpHttpObservabilityAdapters({
+    endpoint,
+    serviceName: process.env.OTEL_SERVICE_NAME?.trim() || serviceName,
+    headers: parseOtlpHeaders(process.env.OTEL_EXPORTER_OTLP_HEADERS)
+  });
 }
