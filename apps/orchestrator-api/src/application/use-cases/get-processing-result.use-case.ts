@@ -70,12 +70,19 @@ export class GetProcessingResultUseCase {
             aggregateId: job.jobId,
             traceId,
             actor,
-            metadata,
-            redactedPayload: this.redactionPolicy.redact({
-              ...metadata,
-              payload: result.payload,
-              warnings: result.warnings
+            metadata: this.redactionPolicy.sanitizeMetadata(metadata, {
+              context: 'audit'
             }) as Record<string, unknown>,
+            redactedPayload: this.redactionPolicy.redact(
+              {
+                ...metadata,
+                payload: result.payload,
+                warnings: result.warnings
+              },
+              {
+                context: 'audit'
+              }
+            ) as Record<string, unknown>,
             createdAt: now,
             retentionUntil: this.retentionPolicy.calculateAuditRetentionUntil(now)
           });
@@ -84,12 +91,17 @@ export class GetProcessingResultUseCase {
             message: 'Processing result queried',
             context: 'GetProcessingResultUseCase',
             traceId,
-            data: this.redactionPolicy.redact({
-              ...metadata,
-              status: result.status,
-              warnings: result.warnings,
-              payload: result.payload
-            }) as Record<string, unknown>,
+            data: this.redactionPolicy.redact(
+              {
+                ...metadata,
+                status: result.status,
+                warnings: result.warnings,
+                payload: result.payload
+              },
+              {
+                context: 'log'
+              }
+            ) as Record<string, unknown>,
             recordedAt: now
           });
           await this.metrics.increment({
@@ -118,11 +130,16 @@ export class GetProcessingResultUseCase {
             message: 'Processing result query failed',
             context: 'GetProcessingResultUseCase',
             traceId,
-            data: this.redactionPolicy.redact({
-              jobId: query.jobId,
-              actorId: actor.actorId,
-              errorMessage: error instanceof Error ? error.message : 'Unexpected failure'
-            }) as Record<string, unknown>,
+            data: this.redactionPolicy.redact(
+              {
+                jobId: query.jobId,
+                actorId: actor.actorId,
+                errorMessage: error instanceof Error ? error.message : 'Unexpected failure'
+              },
+              {
+                context: 'log'
+              }
+            ) as Record<string, unknown>,
             recordedAt: this.clock.now()
           });
           throw error;

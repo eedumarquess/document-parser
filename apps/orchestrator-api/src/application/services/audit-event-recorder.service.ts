@@ -30,10 +30,19 @@ export class AuditEventRecorder {
       aggregateId: input.aggregateId,
       traceId: input.traceId,
       actor: input.actor,
-      metadata: input.metadata,
+      metadata:
+        input.metadata === undefined
+          ? undefined
+          : this.redactionPolicy.sanitizeMetadata(input.metadata, {
+              context: 'audit'
+            }),
       redactedPayload:
         input.redactedPayload ??
-        (input.metadata === undefined ? undefined : this.redactionPolicy.redact(input.metadata)),
+        (input.metadata === undefined
+          ? undefined
+          : this.redactionPolicy.redact(input.metadata, {
+              context: 'audit'
+            })),
       createdAt: input.createdAt,
       retentionUntil: this.retentionPolicy.calculateAuditRetentionUntil(input.createdAt)
     });

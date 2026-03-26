@@ -65,8 +65,12 @@ export class GetJobStatusUseCase {
             aggregateId: job.jobId,
             traceId,
             actor,
-            metadata,
-            redactedPayload: this.redactionPolicy.redact(metadata) as Record<string, unknown>,
+            metadata: this.redactionPolicy.sanitizeMetadata(metadata, {
+              context: 'audit'
+            }) as Record<string, unknown>,
+            redactedPayload: this.redactionPolicy.redact(metadata, {
+              context: 'audit'
+            }) as Record<string, unknown>,
             createdAt: now,
             retentionUntil: this.retentionPolicy.calculateAuditRetentionUntil(now)
           });
@@ -75,7 +79,9 @@ export class GetJobStatusUseCase {
             message: 'Job status queried',
             context: 'GetJobStatusUseCase',
             traceId,
-            data: this.redactionPolicy.redact(metadata) as Record<string, unknown>,
+            data: this.redactionPolicy.redact(metadata, {
+              context: 'log'
+            }) as Record<string, unknown>,
             recordedAt: now
           });
           await this.metrics.increment({
@@ -103,11 +109,16 @@ export class GetJobStatusUseCase {
             message: 'Job status query failed',
             context: 'GetJobStatusUseCase',
             traceId,
-            data: this.redactionPolicy.redact({
-              jobId: query.jobId,
-              actorId: actor.actorId,
-              errorMessage: error instanceof Error ? error.message : 'Unexpected failure'
-            }) as Record<string, unknown>,
+            data: this.redactionPolicy.redact(
+              {
+                jobId: query.jobId,
+                actorId: actor.actorId,
+                errorMessage: error instanceof Error ? error.message : 'Unexpected failure'
+              },
+              {
+                context: 'log'
+              }
+            ) as Record<string, unknown>,
             recordedAt: this.clock.now()
           });
           throw error;
