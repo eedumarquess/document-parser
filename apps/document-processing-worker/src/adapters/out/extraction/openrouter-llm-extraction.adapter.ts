@@ -1,11 +1,18 @@
 import { Injectable } from '@nestjs/common';
-import { TransientFailureError } from '@document-parser/shared-kernel';
+import {
+  FatalFailureError,
+  TransientFailureError
+} from '@document-parser/shared-kernel';
 import type {
   LlmExtractionPort,
   LlmFallbackRequest,
   LlmFallbackResponse
 } from '../../../domain/extraction/extraction-ports';
 import { normalizeRecoveredText } from './llm-response.utils';
+import {
+  executeRemoteLlmRequests,
+  type RemoteLlmExecutionConfig
+} from './remote-llm-execution';
 
 type FetchLike = typeof fetch;
 
@@ -15,6 +22,7 @@ export type OpenRouterLlmConfig = {
   baseUrl?: string;
   siteUrl?: string;
   appName?: string;
+  execution?: Partial<RemoteLlmExecutionConfig>;
 };
 
 @Injectable()
@@ -30,12 +38,12 @@ export class OpenRouterLlmExtractionAdapter implements LlmExtractionPort {
       return this.fallbackAdapter.extractTargets(input);
     }
 
-    const responses: LlmFallbackResponse[] = [];
-    for (const request of input.requests) {
-      responses.push(await this.callRemoteProvider(request));
-    }
-
-    return responses;
+    return executeRemoteLlmRequests({
+      requests: input.requests,
+      config: this.config.execution,
+      modelVersion: this.getModelVersion(),
+      execute: (request, signal) => this.callRemoteProvider(request, signal)
+    });
   }
 
   public getModelVersion(): string {
@@ -46,12 +54,16 @@ export class OpenRouterLlmExtractionAdapter implements LlmExtractionPort {
     return `openrouter:${this.config.model}`;
   }
 
-  private async callRemoteProvider(request: LlmFallbackRequest): Promise<LlmFallbackResponse> {
+  private async callRemoteProvider(
+    request: LlmFallbackRequest,
+    signal: AbortSignal
+  ): Promise<LlmFallbackResponse> {
     let response: Response;
 
     try {
       response = await this.fetchFn(this.config.baseUrl ?? 'https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
+        signal,
         headers: {
           Authorization: `Bearer ${this.config.apiKey}`,
           'Content-Type': 'application/json',
@@ -80,9 +92,7 @@ export class OpenRouterLlmExtractionAdapter implements LlmExtractionPort {
     }
 
     if (!response.ok) {
-      throw new TransientFailureError('OpenRouter LLM fallback failed', {
-        statusCode: response.status
-      });
+      throw classifyProviderFailure('OpenRouter', response.status);
     }
 
     const payload = (await response.json()) as {
@@ -99,4 +109,16 @@ export class OpenRouterLlmExtractionAdapter implements LlmExtractionPort {
       modelVersion: this.getModelVersion()
     };
   }
+}
+
+function classifyProviderFailure(provider: string, statusCode: number) {
+  if (statusCode === 408 || statusCode === 429 || statusCode >= 500) {
+    return new TransientFailureError(`${provider} LLM fallback failed`, {
+      statusCode
+    });
+  }
+
+  return new FatalFailureError(`${provider} LLM fallback rejected the request`, {
+    statusCode
+  });
 }
