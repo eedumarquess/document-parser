@@ -153,6 +153,7 @@ export class SubmitDocumentUseCase {
               {
                 jobId: response.jobId,
                 documentId: response.documentId,
+                operation: 'submit_document',
                 reusedResult: response.reusedResult
               },
               {
@@ -163,7 +164,12 @@ export class SubmitDocumentUseCase {
           });
             await this.metrics.increment({
               name: 'orchestrator.submit_document.reused_result',
-              traceId
+              traceId,
+              tags: {
+                jobId: response.jobId,
+                documentId: response.documentId,
+                operation: 'submit_document'
+              }
             });
 
             return response;
@@ -235,6 +241,7 @@ export class SubmitDocumentUseCase {
               {
                 jobId: queuedJob.jobId,
                 documentId: queuedJob.documentId,
+                operation: 'submit_document',
                 requestedMode: queuedJob.requestedMode
               },
               {
@@ -245,14 +252,22 @@ export class SubmitDocumentUseCase {
           });
           await this.metrics.increment({
             name: 'orchestrator.submit_document.succeeded',
-            traceId
+            traceId,
+            tags: {
+              jobId: queuedJob.jobId,
+              documentId: queuedJob.documentId,
+              operation: 'submit_document'
+            }
           });
 
           return this.toJobResponse(queuedJob);
         } catch (error) {
           await this.metrics.increment({
             name: 'orchestrator.submit_document.failed',
-            traceId
+            traceId,
+            tags: {
+              operation: 'submit_document'
+            }
           });
           await this.logging.log({
             level: 'error',
@@ -263,6 +278,7 @@ export class SubmitDocumentUseCase {
               {
                 actorId: actor.actorId,
                 requestedMode: command.requestedMode,
+                operation: 'submit_document',
                 errorMessage: error instanceof Error ? error.message : 'Unexpected failure'
               },
               {
@@ -276,7 +292,10 @@ export class SubmitDocumentUseCase {
           await this.metrics.recordHistogram({
             name: 'orchestrator.submit_document.duration_ms',
             value: Date.now() - startedAt,
-            traceId
+            traceId,
+            tags: {
+              operation: 'submit_document'
+            }
           });
         }
       }

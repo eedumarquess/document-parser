@@ -60,7 +60,8 @@ export class GetProcessingResultUseCase {
           const now = this.clock.now();
           const metadata = {
             jobId: query.jobId,
-            documentId: job.documentId
+            documentId: job.documentId,
+            operation: 'get_processing_result'
           };
 
           await this.audit.record({
@@ -106,7 +107,12 @@ export class GetProcessingResultUseCase {
           });
           await this.metrics.increment({
             name: 'orchestrator.processing_result.queried',
-            traceId
+            traceId,
+            tags: {
+              jobId: query.jobId,
+              documentId: job.documentId,
+              operation: 'get_processing_result'
+            }
           });
 
           return {
@@ -123,7 +129,11 @@ export class GetProcessingResultUseCase {
         } catch (error) {
           await this.metrics.increment({
             name: 'orchestrator.processing_result.failed',
-            traceId
+            traceId,
+            tags: {
+              jobId: query.jobId,
+              operation: 'get_processing_result'
+            }
           });
           await this.logging.log({
             level: 'error',
@@ -134,6 +144,7 @@ export class GetProcessingResultUseCase {
               {
                 jobId: query.jobId,
                 actorId: actor.actorId,
+                operation: 'get_processing_result',
                 errorMessage: error instanceof Error ? error.message : 'Unexpected failure'
               },
               {
@@ -147,7 +158,11 @@ export class GetProcessingResultUseCase {
           await this.metrics.recordHistogram({
             name: 'orchestrator.processing_result.duration_ms',
             value: Date.now() - startedAt,
-            traceId
+            traceId,
+            tags: {
+              jobId: query.jobId,
+              operation: 'get_processing_result'
+            }
           });
         }
       }

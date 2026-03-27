@@ -55,7 +55,8 @@ export class GetJobStatusUseCase {
           const metadata = {
             jobId: job.jobId,
             documentId: job.documentId,
-            status: job.status
+            status: job.status,
+            operation: 'get_job_status'
           };
 
           await this.audit.record({
@@ -86,7 +87,12 @@ export class GetJobStatusUseCase {
           });
           await this.metrics.increment({
             name: 'orchestrator.job_status.queried',
-            traceId
+            traceId,
+            tags: {
+              jobId: job.jobId,
+              documentId: job.documentId,
+              operation: 'get_job_status'
+            }
           });
 
           return {
@@ -102,7 +108,11 @@ export class GetJobStatusUseCase {
         } catch (error) {
           await this.metrics.increment({
             name: 'orchestrator.job_status.failed',
-            traceId
+            traceId,
+            tags: {
+              jobId: query.jobId,
+              operation: 'get_job_status'
+            }
           });
           await this.logging.log({
             level: 'error',
@@ -113,6 +123,7 @@ export class GetJobStatusUseCase {
               {
                 jobId: query.jobId,
                 actorId: actor.actorId,
+                operation: 'get_job_status',
                 errorMessage: error instanceof Error ? error.message : 'Unexpected failure'
               },
               {
@@ -126,7 +137,11 @@ export class GetJobStatusUseCase {
           await this.metrics.recordHistogram({
             name: 'orchestrator.job_status.duration_ms',
             value: Date.now() - startedAt,
-            traceId
+            traceId,
+            tags: {
+              jobId: query.jobId,
+              operation: 'get_job_status'
+            }
           });
         }
       }
