@@ -1,5 +1,6 @@
 import { DynamicModule, Module, type Provider } from '@nestjs/common';
 import {
+  createFanOutObservabilityAdapters,
   JsonConsoleLoggingAdapter,
   JsonConsoleMetricsAdapter,
   JsonConsoleTracingAdapter,
@@ -18,6 +19,7 @@ import {
   InMemoryPageArtifactRepository,
   InMemoryProcessingJobRepository,
   InMemoryProcessingResultRepository,
+  InMemoryTelemetryEventRepository,
   InMemoryUnitOfWork
 } from './adapters/out/repositories/in-memory.repositories';
 import { AuditEventRecorder } from './application/services/audit-event-recorder.service';
@@ -41,6 +43,7 @@ import type {
   PageArtifactRepositoryPort,
   ProcessingJobRepositoryPort,
   ProcessingResultRepositoryPort,
+  TelemetryEventRepositoryPort,
   TracingPort,
   UnitOfWorkPort
 } from './contracts/ports';
@@ -64,6 +67,7 @@ export type WorkerProviderOverrides = Partial<{
   artifacts: PageArtifactRepositoryPort;
   deadLetters: DeadLetterRepositoryPort;
   audit: AuditPort;
+  telemetry: TelemetryEventRepositoryPort;
   logging: LoggingPort;
   metrics: MetricsPort;
   tracing: TracingPort;
@@ -73,11 +77,20 @@ export type WorkerProviderOverrides = Partial<{
   ocrEngine: OcrEnginePort;
   llmExtraction: LlmExtractionPort;
   extraction: ExtractionPipelinePort;
+  serviceName: string;
 }>;
 
 @Module({})
 export class DocumentProcessingWorkerModule {
   public static register(overrides: WorkerProviderOverrides = {}): DynamicModule {
+    const telemetry = overrides.telemetry ?? new InMemoryTelemetryEventRepository();
+    const observability = createFanOutObservabilityAdapters({
+      serviceName: overrides.serviceName ?? 'document-parser-worker',
+      sink: telemetry,
+      logging: overrides.logging ?? new JsonConsoleLoggingAdapter(),
+      metrics: overrides.metrics ?? new JsonConsoleMetricsAdapter(),
+      tracing: overrides.tracing ?? new JsonConsoleTracingAdapter()
+    });
     const providers: Provider[] = [
       { provide: TOKENS.CLOCK, useValue: overrides.clock ?? new SystemClockAdapter() },
       { provide: TOKENS.ID_GENERATOR, useValue: overrides.idGenerator ?? new RandomIdGeneratorAdapter() },
@@ -104,9 +117,10 @@ export class DocumentProcessingWorkerModule {
         useValue: overrides.deadLetters ?? new InMemoryDeadLetterRepository()
       },
       { provide: TOKENS.AUDIT, useValue: overrides.audit ?? new InMemoryAuditRepository() },
-      { provide: TOKENS.LOGGING, useValue: overrides.logging ?? new JsonConsoleLoggingAdapter() },
-      { provide: TOKENS.METRICS, useValue: overrides.metrics ?? new JsonConsoleMetricsAdapter() },
-      { provide: TOKENS.TRACING, useValue: overrides.tracing ?? new JsonConsoleTracingAdapter() },
+      { provide: TOKENS.TELEMETRY_REPOSITORY, useValue: telemetry },
+      { provide: TOKENS.LOGGING, useValue: observability.logging },
+      { provide: TOKENS.METRICS, useValue: observability.metrics },
+      { provide: TOKENS.TRACING, useValue: observability.tracing },
       {
         provide: TOKENS.JOB_PUBLISHER,
         useValue:
@@ -132,10 +146,17 @@ export class DocumentProcessingWorkerModule {
       ProcessingFailureRecoveryService,
       {
         provide: TOKENS.EXTRACTION_PIPELINE,
-        useFactory: (policy: ProcessingOutcomePolicy) =>
+        useFactory: (
+          policy: ProcessingOutcomePolicy,
+          metrics: MetricsPort,
+          tracing: TracingPort
+        ) =>
           overrides.extraction ??
-          createDefaultExtractionPipeline(policy, overrides),
-        inject: [ProcessingOutcomePolicy]
+          createDefaultExtractionPipeline(policy, overrides, {
+            metrics,
+            tracing
+          }),
+        inject: [ProcessingOutcomePolicy, TOKENS.METRICS, TOKENS.TRACING]
       },
       ProcessJobMessageUseCase,
       ProcessingJobConsumer

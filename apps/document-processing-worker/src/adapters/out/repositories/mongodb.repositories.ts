@@ -1,4 +1,5 @@
 import type { Collection } from 'mongodb';
+import type { TelemetryEventRecord } from '@document-parser/shared-kernel';
 import type {
   AuditEventRecord,
   DeadLetterRecord,
@@ -15,7 +16,8 @@ import type {
   JobAttemptRepositoryPort,
   PageArtifactRepositoryPort,
   ProcessingJobRepositoryPort,
-  ProcessingResultRepositoryPort
+  ProcessingResultRepositoryPort,
+  TelemetryEventRepositoryPort
 } from '../../../contracts/ports';
 import type { MongoDatabaseProvider, MongoSessionContext } from './mongodb.provider';
 
@@ -326,6 +328,64 @@ export class MongoAuditRepositoryAdapter extends MongoRepositoryBase implements 
         { key: { eventType: 1 } },
         { key: { aggregateType: 1, aggregateId: 1 } },
         { key: { traceId: 1 } },
+        { key: { retentionUntil: 1 }, expireAfterSeconds: 0 }
+      ]);
+      this.indexesEnsured = true;
+    }
+
+    return collection;
+  }
+}
+
+export class MongoTelemetryEventRepositoryAdapter
+  extends MongoRepositoryBase
+  implements TelemetryEventRepositoryPort
+{
+  private indexesEnsured = false;
+
+  public async save(event: TelemetryEventRecord): Promise<void> {
+    const collection = await this.getCollection();
+    await collection.replaceOne(
+      { telemetryEventId: event.telemetryEventId },
+      event,
+      { upsert: true, session: this.getSession() }
+    );
+  }
+
+  public async listByJobId(jobId: string): Promise<TelemetryEventRecord[]> {
+    const collection = await this.getCollection();
+    return collection
+      .find({ jobId }, { session: this.getSession() })
+      .sort({ occurredAt: 1 })
+      .toArray();
+  }
+
+  public async listByTraceId(traceId: string): Promise<TelemetryEventRecord[]> {
+    const collection = await this.getCollection();
+    return collection
+      .find({ traceId }, { session: this.getSession() })
+      .sort({ occurredAt: 1 })
+      .toArray();
+  }
+
+  public async listByAttemptId(attemptId: string): Promise<TelemetryEventRecord[]> {
+    const collection = await this.getCollection();
+    return collection
+      .find({ attemptId }, { session: this.getSession() })
+      .sort({ occurredAt: 1 })
+      .toArray();
+  }
+
+  private async getCollection(): Promise<Collection<TelemetryEventRecord>> {
+    const database = await this.provider.getDatabase();
+    const collection = database.collection<TelemetryEventRecord>('telemetry_events');
+    if (!this.indexesEnsured) {
+      await collection.createIndexes([
+        { key: { telemetryEventId: 1 }, unique: true },
+        { key: { jobId: 1, occurredAt: 1 } },
+        { key: { traceId: 1, occurredAt: 1 } },
+        { key: { attemptId: 1, occurredAt: 1 } },
+        { key: { serviceName: 1, occurredAt: 1 } },
         { key: { retentionUntil: 1 }, expireAfterSeconds: 0 }
       ]);
       this.indexesEnsured = true;

@@ -10,7 +10,8 @@ import {
   MongoJobAttemptRepositoryAdapter,
   MongoPageArtifactRepositoryAdapter,
   MongoProcessingJobRepositoryAdapter,
-  MongoProcessingResultRepositoryAdapter
+  MongoProcessingResultRepositoryAdapter,
+  MongoTelemetryEventRepositoryAdapter
 } from '../adapters/out/repositories/mongodb.repositories';
 import { MongoDatabaseProvider, MongoSessionContext, MongoUnitOfWorkAdapter } from '../adapters/out/repositories/mongodb.provider';
 import { MinioBinaryStorageAdapter } from '../adapters/out/storage/minio-binary-storage.adapter';
@@ -27,6 +28,7 @@ type WorkerRuntimeBootstrap = {
 };
 
 export function buildWorkerRuntimeBootstrapFromEnv(): WorkerRuntimeBootstrap {
+  const serviceName = process.env.OTEL_SERVICE_NAME?.trim() || 'document-parser-worker';
   const mode = resolveRuntimeMode(
     process.env.WORKER_RUNTIME_MODE ?? process.env.DOCUMENT_PARSER_RUNTIME_MODE ?? 'memory'
   );
@@ -35,7 +37,8 @@ export function buildWorkerRuntimeBootstrapFromEnv(): WorkerRuntimeBootstrap {
     return {
       mode,
       overrides: {
-        ...buildObservabilityOverrides('document-parser-worker'),
+        serviceName,
+        ...buildObservabilityOverrides(serviceName),
         storage: createNoopStorage(),
         publisher: createNoopPublisher()
       }
@@ -52,7 +55,8 @@ export function buildWorkerRuntimeBootstrapFromEnv(): WorkerRuntimeBootstrap {
     queueName,
     rabbitMqUrl,
     overrides: {
-      ...buildObservabilityOverrides('document-parser-worker'),
+      serviceName,
+      ...buildObservabilityOverrides(serviceName),
       storage: new MinioBinaryStorageAdapter({
         endPoint: getRequiredEnv('MINIO_ENDPOINT'),
         port: parseNumberEnv('MINIO_PORT'),
@@ -67,6 +71,7 @@ export function buildWorkerRuntimeBootstrapFromEnv(): WorkerRuntimeBootstrap {
       artifacts: new MongoPageArtifactRepositoryAdapter(mongoProvider, sessionContext),
       deadLetters: new MongoDeadLetterRepositoryAdapter(mongoProvider, sessionContext),
       audit: new MongoAuditRepositoryAdapter(mongoProvider, sessionContext),
+      telemetry: new MongoTelemetryEventRepositoryAdapter(mongoProvider, sessionContext),
       publisher: new RabbitMqJobPublisherAdapter(rabbitMqUrl, queueName),
       unitOfWork: new MongoUnitOfWorkAdapter(mongoProvider, sessionContext)
     }
