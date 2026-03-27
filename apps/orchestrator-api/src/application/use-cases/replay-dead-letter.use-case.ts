@@ -133,7 +133,9 @@ export class ReplayDeadLetterUseCase {
               {
                 dlqEventId: deadLetter.dlqEventId,
                 jobId: derived.queuedJob.jobId,
-                sourceJobId: originalJob.jobId
+                documentId: derived.queuedJob.documentId,
+                sourceJobId: originalJob.jobId,
+                operation: 'replay_dead_letter'
               },
               {
                 context: 'log'
@@ -143,14 +145,23 @@ export class ReplayDeadLetterUseCase {
           });
           await this.metrics.increment({
             name: 'orchestrator.dead_letter_replay.succeeded',
-            traceId
+            traceId,
+            tags: {
+              jobId: derived.queuedJob.jobId,
+              documentId: derived.queuedJob.documentId,
+              attemptId: deadLetter.attemptId,
+              operation: 'replay_dead_letter'
+            }
           });
 
           return toJobResponse(derived.queuedJob);
         } catch (error) {
           await this.metrics.increment({
             name: 'orchestrator.dead_letter_replay.failed',
-            traceId
+            traceId,
+            tags: {
+              operation: 'replay_dead_letter'
+            }
           });
           await this.logging.log({
             level: 'error',
@@ -161,6 +172,7 @@ export class ReplayDeadLetterUseCase {
               {
                 actorId: actor.actorId,
                 dlqEventId: command.dlqEventId,
+                operation: 'replay_dead_letter',
                 errorMessage: error instanceof Error ? error.message : 'Unexpected failure'
               },
               {
@@ -174,7 +186,10 @@ export class ReplayDeadLetterUseCase {
           await this.metrics.recordHistogram({
             name: 'orchestrator.dead_letter_replay.duration_ms',
             value: Date.now() - startedAt,
-            traceId
+            traceId,
+            tags: {
+              operation: 'replay_dead_letter'
+            }
           });
         }
       }

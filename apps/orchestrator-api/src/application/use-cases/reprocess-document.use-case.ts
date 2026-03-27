@@ -117,7 +117,9 @@ export class ReprocessDocumentUseCase {
             data: this.redactionPolicy.redact(
               {
                 jobId: derived.queuedJob.jobId,
-                reprocessOfJobId: originalJob.jobId
+                documentId: derived.queuedJob.documentId,
+                reprocessOfJobId: originalJob.jobId,
+                operation: 'reprocess_document'
               },
               {
                 context: 'log'
@@ -127,14 +129,23 @@ export class ReprocessDocumentUseCase {
           });
           await this.metrics.increment({
             name: 'orchestrator.reprocess_document.succeeded',
-            traceId
+            traceId,
+            tags: {
+              jobId: derived.queuedJob.jobId,
+              documentId: derived.queuedJob.documentId,
+              operation: 'reprocess_document'
+            }
           });
 
           return toJobResponse(derived.queuedJob);
         } catch (error) {
           await this.metrics.increment({
             name: 'orchestrator.reprocess_document.failed',
-            traceId
+            traceId,
+            tags: {
+              jobId: command.jobId,
+              operation: 'reprocess_document'
+            }
           });
           await this.logging.log({
             level: 'error',
@@ -145,6 +156,7 @@ export class ReprocessDocumentUseCase {
               {
                 actorId: actor.actorId,
                 jobId: command.jobId,
+                operation: 'reprocess_document',
                 errorMessage: error instanceof Error ? error.message : 'Unexpected failure'
               },
               {
@@ -158,7 +170,11 @@ export class ReprocessDocumentUseCase {
           await this.metrics.recordHistogram({
             name: 'orchestrator.reprocess_document.duration_ms',
             value: Date.now() - startedAt,
-            traceId
+            traceId,
+            tags: {
+              jobId: command.jobId,
+              operation: 'reprocess_document'
+            }
           });
         }
       }
