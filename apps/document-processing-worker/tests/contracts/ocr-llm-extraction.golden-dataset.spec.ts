@@ -4,6 +4,7 @@ import { ProcessingOutcomePolicy } from '../../src/domain/policies/processing-ou
 
 const baseInput = {
   actor: { actorId: 'owner-1', role: Role.OWNER },
+  traceId: 'trace-golden-1',
   document: {
     documentId: 'doc-1',
     hash: 'sha256:doc',

@@ -13,6 +13,7 @@ describe('SimulatedDocumentExtractionAdapter contract', () => {
   const adapter = new SimulatedDocumentExtractionAdapter(new ProcessingOutcomePolicy());
   const baseInput = {
     actor: buildActor(),
+    traceId: 'trace-simulated-1',
     document: {
       documentId: 'doc-1',
       hash: 'sha256:doc',
