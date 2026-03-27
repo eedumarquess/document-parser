@@ -5,6 +5,10 @@
   "packageManager": "pnpm@10.6.3",
   "scripts": {
     "build": "tsc -b packages/shared-kernel/tsconfig.json packages/document-processing-domain/tsconfig.json packages/testkit/tsconfig.json apps/orchestrator-api/tsconfig.json apps/document-processing-worker/tsconfig.json --force",
+    "build:api": "corepack pnpm --filter @document-parser/orchestrator-api build",
+    "build:worker": "corepack pnpm --filter @document-parser/document-processing-worker build",
+    "dev:api": "corepack pnpm run build:api && node apps/orchestrator-api/dist/src/main.js",
+    "dev:worker": "corepack pnpm run build:worker && node apps/document-processing-worker/dist/src/main.js",
     "lint": "eslint .",
     "typecheck": "tsc -b packages/shared-kernel/tsconfig.json packages/document-processing-domain/tsconfig.json packages/testkit/tsconfig.json apps/orchestrator-api/tsconfig.json apps/document-processing-worker/tsconfig.json --force --pretty false",
     "test": "node tooling/scripts/run-all-tests.cjs",
