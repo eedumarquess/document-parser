@@ -123,6 +123,36 @@ describe('Document jobs e2e', () => {
           jobId: job.jobId,
           createdAt: clock.now(),
           retentionUntil: new Date('2026-06-23T12:00:00.000Z')
+        },
+        {
+          artifactId: `artifact-prompt-${job.jobId}`,
+          artifactType: ArtifactType.LLM_PROMPT,
+          storageBucket: 'artifacts',
+          storageObjectKey: `llm/${job.jobId}/prompt-1.json`,
+          mimeType: 'application/json',
+          pageNumber: 1,
+          metadata: {
+            promptText: 'cpf 123.456.789-00 bearer sk_live_super_secret_token_1234567890'
+          },
+          documentId: document.documentId,
+          jobId: job.jobId,
+          createdAt: clock.now(),
+          retentionUntil: new Date('2026-06-23T12:00:00.000Z')
+        },
+        {
+          artifactId: `artifact-response-${job.jobId}`,
+          artifactType: ArtifactType.LLM_RESPONSE,
+          storageBucket: 'artifacts',
+          storageObjectKey: `llm/${job.jobId}/response-1.json`,
+          mimeType: 'application/json',
+          pageNumber: 1,
+          metadata: {
+            responseText: 'email paciente@example.com bearer sk_live_super_secret_token_1234567890'
+          },
+          documentId: document.documentId,
+          jobId: job.jobId,
+          createdAt: clock.now(),
+          retentionUntil: new Date('2026-06-23T12:00:00.000Z')
         }
       ]);
       await telemetry.save({
@@ -453,26 +483,36 @@ describe('Document jobs e2e', () => {
       .set('x-role', Role.OPERATOR);
 
     expect(contextResponse.status).toBe(200);
-    expect(contextResponse.body).toMatchObject({
-      summary: {
-        jobId: createResponse.body.jobId,
-        documentId: createResponse.body.documentId,
-        status: 'COMPLETED'
-      },
-      traceIds: expect.arrayContaining(['trace-e2e-ops']),
-      artifacts: expect.arrayContaining([
+    expect(contextResponse.body.summary).toMatchObject({
+      jobId: createResponse.body.jobId,
+      documentId: createResponse.body.documentId,
+      status: 'COMPLETED'
+    });
+    expect(contextResponse.body.traceIds).toEqual(expect.arrayContaining(['trace-e2e-ops']));
+    expect(contextResponse.body.artifacts).toEqual(
+      expect.arrayContaining([
         expect.objectContaining({
           artifactType: 'OCR_JSON',
           previewText: 'cpf [cpf] email [email]'
+        }),
+        expect.objectContaining({
+          artifactType: 'LLM_PROMPT',
+          previewText: 'cpf [cpf] [token]'
+        }),
+        expect.objectContaining({
+          artifactType: 'LLM_RESPONSE',
+          previewText: 'email [email] [token]'
         })
-      ]),
-      telemetryEvents: expect.arrayContaining([
+      ])
+    );
+    expect(contextResponse.body.telemetryEvents).toEqual(
+      expect.arrayContaining([
         expect.objectContaining({
           serviceName: 'document-parser-worker',
           kind: 'span'
         })
       ])
-    });
+    );
 
     const panelResponse = await request(app.getHttpServer())
       .get(`/ops/jobs/${createResponse.body.jobId}`)
@@ -484,7 +524,10 @@ describe('Document jobs e2e', () => {
     expect(panelResponse.text).toContain(createResponse.body.jobId);
     expect(panelResponse.text).toContain('document-parser-worker');
     expect(panelResponse.text).toContain('cpf [cpf] email [email]');
+    expect(panelResponse.text).toContain('cpf [cpf] [token]');
+    expect(panelResponse.text).toContain('email [email] [token]');
     expect(panelResponse.text).not.toContain('123.456.789-00');
     expect(panelResponse.text).not.toContain('paciente@example.com');
+    expect(panelResponse.text).not.toContain('sk_live_super_secret_token_1234567890');
   });
 });

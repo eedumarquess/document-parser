@@ -5,6 +5,12 @@ export function renderJobOperationalPanel(context: JobOperationalContextResponse
     context.telemetryEvents,
     (event) => event.serviceName
   );
+  const telemetryServiceSummaries = Object.entries(telemetryByService).map(([serviceName, events]) => ({
+    serviceName,
+    logs: events.filter((event) => event.kind === 'log').length,
+    metrics: events.filter((event) => event.kind === 'metric').length,
+    spans: events.filter((event) => event.kind === 'span').length
+  }));
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -138,6 +144,14 @@ export function renderJobOperationalPanel(context: JobOperationalContextResponse
         flex-wrap: wrap;
         margin-top: 12px;
       }
+      .section-intro {
+        color: var(--muted);
+        margin-top: 8px;
+      }
+      .empty {
+        color: var(--muted);
+        margin-top: 12px;
+      }
     </style>
   </head>
   <body>
@@ -149,6 +163,19 @@ export function renderJobOperationalPanel(context: JobOperationalContextResponse
           <strong>${escapeHtml(context.summary.documentId)}</strong>
         </p>
       </header>
+
+      <section>
+        <h2>Operational Totals</h2>
+        <p class="section-intro">Fast counters to orient the inspection before drilling into timeline and payload details.</p>
+        <div class="grid">
+          ${summaryCard('Trace IDs', `${context.traceIds.length}`)}
+          ${summaryCard('Timeline Items', `${context.timeline.length}`)}
+          ${summaryCard('Attempts', `${context.attempts.length}`)}
+          ${summaryCard('Telemetry Events', `${context.telemetryEvents.length}`)}
+          ${summaryCard('Artifacts', `${context.artifacts.length}`)}
+          ${summaryCard('Dead Letters', `${context.deadLetters.length}`)}
+        </div>
+      </section>
 
       <section>
         <h2>Summary</h2>
@@ -163,7 +190,9 @@ export function renderJobOperationalPanel(context: JobOperationalContextResponse
           ${summaryCard('Error', context.summary.errorCode ? `${context.summary.errorCode}: ${context.summary.errorMessage ?? ''}` : 'none')}
         </div>
         <div class="trace-list">
-          ${context.traceIds.map((traceId: string) => `<span class="pill">${escapeHtml(traceId)}</span>`).join('')}
+          ${context.traceIds.length === 0
+            ? '<span class="empty">No trace IDs associated with this job yet.</span>'
+            : context.traceIds.map((traceId: string) => `<span class="pill">${escapeHtml(traceId)}</span>`).join('')}
         </div>
       </section>
 
@@ -218,6 +247,17 @@ export function renderJobOperationalPanel(context: JobOperationalContextResponse
 
       <section>
         <h2>Telemetry</h2>
+        <p class="section-intro">Grouped by service so it is easier to separate API orchestration from worker execution.</p>
+        <div class="grid">
+          ${telemetryServiceSummaries.length === 0
+            ? '<p class="empty">No telemetry persisted for this job.</p>'
+            : telemetryServiceSummaries.map((summary) => `
+                <article class="card">
+                  <div class="label">${escapeHtml(summary.serviceName)}</div>
+                  <div class="value">logs ${summary.logs} | metrics ${summary.metrics} | spans ${summary.spans}</div>
+                </article>
+              `).join('')}
+        </div>
         ${(Object.entries(telemetryByService) as Array<[string, JobOperationalContextResponse['telemetryEvents']]>).map(([serviceName, events]) => `
           <article class="card" style="margin-top: 14px;">
             <h3>${escapeHtml(serviceName)}</h3>
@@ -247,6 +287,7 @@ export function renderJobOperationalPanel(context: JobOperationalContextResponse
 
       <section>
         <h2>Artifacts</h2>
+        <p class="section-intro">The preview column is derived at read time and never exposes raw OCR, prompt or response payloads.</p>
         ${renderArtifactsTable(context)}
       </section>
     </main>
@@ -354,7 +395,9 @@ function renderArtifactsTable(context: JobOperationalContextResponse): string {
     <thead>
       <tr>
         <th>Artifact</th>
+        <th>Page</th>
         <th>Storage</th>
+        <th>Retention</th>
         <th>Metadata</th>
         <th>Preview</th>
       </tr>
@@ -366,7 +409,9 @@ function renderArtifactsTable(context: JobOperationalContextResponse): string {
             <strong>${escapeHtml(artifact.artifactType)}</strong><br />
             ${escapeHtml(artifact.artifactId)}
           </td>
+          <td>${escapeHtml(artifact.pageNumber === undefined ? '-' : `${artifact.pageNumber}`)}</td>
           <td>${escapeHtml(`${artifact.storageBucket}/${artifact.storageObjectKey}`)}</td>
+          <td>${escapeHtml(artifact.retentionUntil)}</td>
           <td><pre>${escapeHtml(JSON.stringify(artifact.metadata ?? {}, null, 2))}</pre></td>
           <td><pre>${escapeHtml(artifact.previewText ?? '')}</pre></td>
         </tr>

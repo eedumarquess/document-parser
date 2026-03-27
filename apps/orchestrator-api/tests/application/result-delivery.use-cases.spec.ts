@@ -478,6 +478,36 @@ describe('GetJobOperationalContextUseCase', () => {
         jobId: job.jobId,
         createdAt: new Date('2026-03-25T12:03:00.000Z'),
         retentionUntil: new Date('2026-06-23T12:00:00.000Z')
+      },
+      {
+        artifactId: 'artifact-ops-prompt',
+        artifactType: ArtifactType.LLM_PROMPT,
+        storageBucket: 'artifacts',
+        storageObjectKey: 'llm/job-ops/prompt-1.json',
+        mimeType: 'application/json',
+        pageNumber: 1,
+        metadata: {
+          promptText: 'cpf 123.456.789-00 bearer sk_live_super_secret_token_1234567890'
+        },
+        documentId: job.documentId,
+        jobId: job.jobId,
+        createdAt: new Date('2026-03-25T12:03:10.000Z'),
+        retentionUntil: new Date('2026-06-23T12:00:00.000Z')
+      },
+      {
+        artifactId: 'artifact-ops-response',
+        artifactType: ArtifactType.LLM_RESPONSE,
+        storageBucket: 'artifacts',
+        storageObjectKey: 'llm/job-ops/response-1.json',
+        mimeType: 'application/json',
+        pageNumber: 1,
+        metadata: {
+          responseText: 'email paciente@example.com bearer sk_live_super_secret_token_1234567890'
+        },
+        documentId: job.documentId,
+        jobId: job.jobId,
+        createdAt: new Date('2026-03-25T12:03:20.000Z'),
+        retentionUntil: new Date('2026-06-23T12:00:00.000Z')
       }
     ]);
 
@@ -512,13 +542,25 @@ describe('GetJobOperationalContextUseCase', () => {
       status: JobStatus.COMPLETED
     });
     expect(response.traceIds).toEqual(['trace-ops-1']);
-    expect(response.artifacts).toEqual([
-      expect.objectContaining({
-        artifactId: 'artifact-ops-ocr',
-        previewText: 'cpf [cpf] email [email]',
-        metadata: undefined
-      })
-    ]);
+    expect(response.artifacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          artifactId: 'artifact-ops-ocr',
+          previewText: 'cpf [cpf] email [email]',
+          metadata: undefined
+        }),
+        expect.objectContaining({
+          artifactId: 'artifact-ops-prompt',
+          previewText: 'cpf [cpf] [token]',
+          metadata: undefined
+        }),
+        expect.objectContaining({
+          artifactId: 'artifact-ops-response',
+          previewText: 'email [email] [token]',
+          metadata: undefined
+        })
+      ])
+    );
     expect(response.telemetryEvents).toEqual([
       expect.objectContaining({
         telemetryEventId: 'telemetry-ops-1',
