@@ -24,7 +24,8 @@ import {
   MongoJobAttemptRepositoryAdapter,
   MongoPageArtifactRepositoryAdapter,
   MongoProcessingJobRepositoryAdapter,
-  MongoProcessingResultRepositoryAdapter
+  MongoProcessingResultRepositoryAdapter,
+  MongoTelemetryEventRepositoryAdapter
 } from '../../src/adapters/out/repositories/mongodb.repositories';
 import {
   MongoDatabaseProvider,
@@ -51,6 +52,7 @@ describeRealInfra('Document processing worker real infrastructure', () => {
   let artifacts: MongoPageArtifactRepositoryAdapter;
   let deadLetters: MongoDeadLetterRepositoryAdapter;
   let audit: MongoAuditRepositoryAdapter;
+  let telemetry: MongoTelemetryEventRepositoryAdapter;
   let storage: MinioBinaryStorageAdapter;
   let publisher: RabbitMqJobPublisherAdapter;
   let listener: RabbitMqProcessingJobListener;
@@ -83,6 +85,7 @@ describeRealInfra('Document processing worker real infrastructure', () => {
     artifacts = new MongoPageArtifactRepositoryAdapter(mongoProvider, sessionContext);
     deadLetters = new MongoDeadLetterRepositoryAdapter(mongoProvider, sessionContext);
     audit = new MongoAuditRepositoryAdapter(mongoProvider, sessionContext);
+    telemetry = new MongoTelemetryEventRepositoryAdapter(mongoProvider, sessionContext);
 
     minioContainer = await new GenericContainer('minio/minio:RELEASE.2024-03-30T09-41-56Z')
       .withExposedPorts(9000)
@@ -129,6 +132,7 @@ describeRealInfra('Document processing worker real infrastructure', () => {
           artifacts,
           deadLetters,
           audit,
+          telemetry,
           publisher,
           unitOfWork: new MongoUnitOfWorkAdapter(mongoProvider, sessionContext),
           logging: new InMemoryLoggingAdapter(),
@@ -177,6 +181,17 @@ describeRealInfra('Document processing worker real infrastructure', () => {
       payload: 'Paciente consciente. febre: [marcado]'
     });
     await expect(artifacts.listByJobId(seed.message.jobId)).resolves.toHaveLength(5);
+    await expect(telemetry.listByJobId(seed.message.jobId)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'span',
+          serviceName: 'document-parser-worker',
+          traceId: seed.message.traceId,
+          jobId: seed.message.jobId,
+          attemptId: seed.message.attemptId
+        })
+      ])
+    );
     await expect(audit.list()).resolves.toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -279,7 +294,8 @@ describeRealInfra('Document processing worker real infrastructure', () => {
         'job_attempts',
         'page_artifacts',
         'processing_jobs',
-        'processing_results'
+        'processing_results',
+        'telemetry_events'
       ])
     );
 
@@ -287,6 +303,7 @@ describeRealInfra('Document processing worker real infrastructure', () => {
     const resultIndexes = await database.collection('processing_results').indexes();
     const deadLetterIndexes = await database.collection('dead_letter_events').indexes();
     const auditIndexes = await database.collection('audit_events').indexes();
+    const telemetryIndexes = await database.collection('telemetry_events').indexes();
 
     expect(pageArtifactIndexes).toEqual(
       expect.arrayContaining([
@@ -314,6 +331,26 @@ describeRealInfra('Document processing worker real infrastructure', () => {
     );
     expect(auditIndexes).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({
+          key: { retentionUntil: 1 },
+          expireAfterSeconds: 0
+        })
+      ])
+    );
+    expect(telemetryIndexes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: { jobId: 1, occurredAt: 1 }
+        }),
+        expect.objectContaining({
+          key: { traceId: 1, occurredAt: 1 }
+        }),
+        expect.objectContaining({
+          key: { attemptId: 1, occurredAt: 1 }
+        }),
+        expect.objectContaining({
+          key: { serviceName: 1, occurredAt: 1 }
+        }),
         expect.objectContaining({
           key: { retentionUntil: 1 },
           expireAfterSeconds: 0
