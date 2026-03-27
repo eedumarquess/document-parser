@@ -4,6 +4,37 @@ Todas as mudancas relevantes deste repositorio devem ser registradas aqui.
 
 O formato segue uma adaptacao simples de `Keep a Changelog` e usa as tags de contexto dos commits como apoio para rastreabilidade.
 
+## [2026-03-27] - Refinos do painel operacional e bootstrap local
+
+### Added
+
+- Cards de totais operacionais no painel HTML para `traceIds`, itens de timeline, tentativas, eventos de telemetria, artefatos e registros de DLQ.
+- Resumo por servico na secao de telemetria do painel, separando contagens de `logs`, `metrics` e `spans` antes da lista detalhada.
+- Scripts raiz `build:api`, `build:worker`, `dev:api` e `dev:worker` para compilar e subir os servicos diretamente do workspace.
+
+### Changed
+
+- A tabela de artefatos do painel passou a exibir `pageNumber` e `retentionUntil`, junto de um texto explicativo sobre a origem segura do preview.
+- As suites de aplicacao e E2E da `orchestrator-api` passaram a cobrir previews redigidos de artefatos `LLM_PROMPT` e `LLM_RESPONSE`, incluindo mascaramento de `cpf`, `email` e tokens.
+- Os atalhos de bootstrap local passaram a usar `corepack pnpm` para nao depender de uma instalacao global do `pnpm` no `PATH`.
+
+### Fixed
+
+- O painel deixou de tratar ausencia de `traceIds` e de telemetria como listas silenciosamente vazias; agora os estados sem dados ficam explicitos na interface.
+- A cobertura operacional passou a proteger o painel HTML contra regressao que volte a expor `promptText`, `responseText` ou segredos em previews derivados.
+
+### Technical Notes
+
+- `dev:api` continua subindo a API em `memory` por default na porta `3000`; para fluxo distribuido completo ainda e necessario definir runtime `real` e iniciar o worker com a infraestrutura externa.
+- O lockfile foi realinhado ao grafo atual de workspaces para manter os links locais coerentes com os manifests ja declarados no repositorio.
+
+### Commit Contexts
+
+- `feat(orchestrator-ops-panel)`
+- `feat(dev-scripts)`
+- `bug(lockfile)`
+- `docs(changelog)`
+
 ## [2026-03-26] - Painel operacional e telemetria consultavel por job
 
 ### Added
