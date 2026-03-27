@@ -6,6 +6,8 @@ import type {
   DocumentRecord,
   IngestionTransitionRecord,
   JobAttemptRecord,
+  OperationalTelemetryRecord,
+  PageArtifactRecord,
   ProcessingJobRecord,
   ProcessingResultRecord
 } from '../../../contracts/models';
@@ -15,8 +17,10 @@ import type {
   DeadLetterRepositoryPort,
   DocumentRepositoryPort,
   JobAttemptRepositoryPort,
+  PageArtifactRepositoryPort,
   ProcessingJobRepositoryPort,
-  ProcessingResultRepositoryPort
+  ProcessingResultRepositoryPort,
+  TelemetryEventRepositoryPort
 } from '../../../contracts/ports';
 import { CompatibilityKey } from '../../../domain/value-objects/compatibility-key';
 import type { MongoDatabaseProvider, MongoSessionContext } from './mongodb.provider';
@@ -48,6 +52,10 @@ type MongoProcessingResultShape = ProcessingResultRecord;
 type MongoAuditEventShape = AuditEventRecord;
 
 type MongoDeadLetterShape = DeadLetterRecord;
+
+type MongoPageArtifactShape = PageArtifactRecord;
+
+type MongoTelemetryEventShape = OperationalTelemetryRecord;
 
 abstract class MongoRepositoryBase {
   public constructor(
@@ -290,6 +298,22 @@ export class MongoDeadLetterRepositoryAdapter
       .toArray();
   }
 
+  public async listByJobId(jobId: string): Promise<DeadLetterRecord[]> {
+    const collection = await this.getCollection();
+    return collection
+      .find({ jobId }, { session: this.getSession() })
+      .sort({ lastSeenAt: -1 })
+      .toArray();
+  }
+
+  public async listByTraceId(traceId: string): Promise<DeadLetterRecord[]> {
+    const collection = await this.getCollection();
+    return collection
+      .find({ traceId }, { session: this.getSession() })
+      .sort({ lastSeenAt: -1 })
+      .toArray();
+  }
+
   private async getCollection(): Promise<Collection<MongoDeadLetterShape>> {
     const database = await this.provider.getDatabase();
     const collection = database.collection<MongoDeadLetterShape>('dead_letter_events');
@@ -328,6 +352,27 @@ export class MongoAuditRepositoryAdapter extends MongoRepositoryBase implements 
       .toArray();
   }
 
+  public async listByJobId(jobId: string): Promise<AuditEventRecord[]> {
+    const collection = await this.getCollection();
+    return collection
+      .find(
+        {
+          $or: [{ aggregateId: jobId }, { 'metadata.jobId': jobId }]
+        },
+        { session: this.getSession() }
+      )
+      .sort({ createdAt: -1 })
+      .toArray();
+  }
+
+  public async listByTraceId(traceId: string): Promise<AuditEventRecord[]> {
+    const collection = await this.getCollection();
+    return collection
+      .find({ traceId }, { session: this.getSession() })
+      .sort({ createdAt: -1 })
+      .toArray();
+  }
+
   private async getCollection(): Promise<Collection<MongoAuditEventShape>> {
     const database = await this.provider.getDatabase();
     const collection = database.collection<MongoAuditEventShape>('audit_events');
@@ -338,6 +383,113 @@ export class MongoAuditRepositoryAdapter extends MongoRepositoryBase implements 
         { key: { aggregateType: 1, aggregateId: 1 } },
         { key: { traceId: 1 } },
         { key: { createdAt: -1 } },
+        { key: { retentionUntil: 1 }, expireAfterSeconds: 0 }
+      ]);
+      this.indexesEnsured = true;
+    }
+
+    return collection;
+  }
+}
+
+export class MongoPageArtifactRepositoryAdapter
+  extends MongoRepositoryBase
+  implements PageArtifactRepositoryPort
+{
+  private indexesEnsured = false;
+
+  public async saveMany(artifacts: PageArtifactRecord[]): Promise<void> {
+    if (artifacts.length === 0) {
+      return;
+    }
+
+    const collection = await this.getCollection();
+    await collection.bulkWrite(
+      artifacts.map((artifact) => ({
+        replaceOne: {
+          filter: { artifactId: artifact.artifactId },
+          replacement: artifact,
+          upsert: true
+        }
+      })),
+      { session: this.getSession() }
+    );
+  }
+
+  public async listByJobId(jobId: string): Promise<PageArtifactRecord[]> {
+    const collection = await this.getCollection();
+    return collection
+      .find({ jobId }, { session: this.getSession() })
+      .sort({ pageNumber: 1, createdAt: 1 })
+      .toArray();
+  }
+
+  private async getCollection(): Promise<Collection<MongoPageArtifactShape>> {
+    const database = await this.provider.getDatabase();
+    const collection = database.collection<MongoPageArtifactShape>('page_artifacts');
+    if (!this.indexesEnsured) {
+      await collection.createIndexes([
+        { key: { artifactId: 1 }, unique: true },
+        { key: { jobId: 1, createdAt: 1 } },
+        { key: { documentId: 1 } },
+        { key: { retentionUntil: 1 }, expireAfterSeconds: 0 }
+      ]);
+      this.indexesEnsured = true;
+    }
+
+    return collection;
+  }
+}
+
+export class MongoTelemetryEventRepositoryAdapter
+  extends MongoRepositoryBase
+  implements TelemetryEventRepositoryPort
+{
+  private indexesEnsured = false;
+
+  public async save(event: OperationalTelemetryRecord): Promise<void> {
+    const collection = await this.getCollection();
+    await collection.replaceOne(
+      { telemetryEventId: event.telemetryEventId },
+      event,
+      { upsert: true, session: this.getSession() }
+    );
+  }
+
+  public async listByJobId(jobId: string): Promise<OperationalTelemetryRecord[]> {
+    const collection = await this.getCollection();
+    return collection
+      .find({ jobId }, { session: this.getSession() })
+      .sort({ occurredAt: 1 })
+      .toArray();
+  }
+
+  public async listByTraceId(traceId: string): Promise<OperationalTelemetryRecord[]> {
+    const collection = await this.getCollection();
+    return collection
+      .find({ traceId }, { session: this.getSession() })
+      .sort({ occurredAt: 1 })
+      .toArray();
+  }
+
+  public async listByAttemptId(attemptId: string): Promise<OperationalTelemetryRecord[]> {
+    const collection = await this.getCollection();
+    return collection
+      .find({ attemptId }, { session: this.getSession() })
+      .sort({ occurredAt: 1 })
+      .toArray();
+  }
+
+  private async getCollection(): Promise<Collection<MongoTelemetryEventShape>> {
+    const database = await this.provider.getDatabase();
+    const collection = database.collection<MongoTelemetryEventShape>('telemetry_events');
+    if (!this.indexesEnsured) {
+      await collection.createIndexes([
+        { key: { telemetryEventId: 1 }, unique: true },
+        { key: { jobId: 1, occurredAt: 1 } },
+        { key: { traceId: 1, occurredAt: 1 } },
+        { key: { attemptId: 1, occurredAt: 1 } },
+        { key: { serviceName: 1, occurredAt: 1 } },
         { key: { retentionUntil: 1 }, expireAfterSeconds: 0 }
       ]);
       this.indexesEnsured = true;

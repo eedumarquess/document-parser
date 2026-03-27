@@ -8,8 +8,10 @@ import {
   MongoDeadLetterRepositoryAdapter,
   MongoDocumentRepositoryAdapter,
   MongoJobAttemptRepositoryAdapter,
+  MongoPageArtifactRepositoryAdapter,
   MongoProcessingJobRepositoryAdapter,
-  MongoProcessingResultRepositoryAdapter
+  MongoProcessingResultRepositoryAdapter,
+  MongoTelemetryEventRepositoryAdapter
 } from '../../src/adapters/out/repositories/mongodb.repositories';
 import { MongoDatabaseProvider, MongoSessionContext, MongoUnitOfWorkAdapter } from '../../src/adapters/out/repositories/mongodb.provider';
 import { MinioBinaryStorageAdapter } from '../../src/adapters/out/storage/minio-binary-storage.adapter';
@@ -38,8 +40,10 @@ describeRealInfra('Real infrastructure adapter contracts', () => {
   let jobs: MongoProcessingJobRepositoryAdapter;
   let attempts: MongoJobAttemptRepositoryAdapter;
   let results: MongoProcessingResultRepositoryAdapter;
+  let artifacts: MongoPageArtifactRepositoryAdapter;
   let deadLetters: MongoDeadLetterRepositoryAdapter;
   let audit: MongoAuditRepositoryAdapter;
+  let telemetry: MongoTelemetryEventRepositoryAdapter;
   let storage: MinioBinaryStorageAdapter;
   let publisher: RabbitMqJobPublisherAdapter;
   let rabbitMqUrl: string;
@@ -68,8 +72,10 @@ describeRealInfra('Real infrastructure adapter contracts', () => {
     jobs = new MongoProcessingJobRepositoryAdapter(mongoProvider, sessionContext);
     attempts = new MongoJobAttemptRepositoryAdapter(mongoProvider, sessionContext);
     results = new MongoProcessingResultRepositoryAdapter(mongoProvider, sessionContext);
+    artifacts = new MongoPageArtifactRepositoryAdapter(mongoProvider, sessionContext);
     deadLetters = new MongoDeadLetterRepositoryAdapter(mongoProvider, sessionContext);
     audit = new MongoAuditRepositoryAdapter(mongoProvider, sessionContext);
+    telemetry = new MongoTelemetryEventRepositoryAdapter(mongoProvider, sessionContext);
 
     minioContainer = await new GenericContainer('minio/minio:RELEASE.2024-03-30T09-41-56Z')
       .withExposedPorts(9000)
@@ -213,6 +219,20 @@ describeRealInfra('Real infrastructure adapter contracts', () => {
         createdAt: now,
         retentionUntil: new Date('2026-09-21T12:00:00.000Z')
       });
+      await artifacts.saveMany([
+        {
+          artifactId: 'artifact-1',
+          artifactType: 'OCR_JSON',
+          storageBucket: 'artifacts',
+          storageObjectKey: 'ocr/job-1/page-1.json',
+          mimeType: 'application/json',
+          metadata: { pageSourceLength: 42 },
+          documentId: 'doc-1',
+          jobId: 'job-1',
+          createdAt: now,
+          retentionUntil: new Date('2026-06-23T12:00:00.000Z')
+        }
+      ]);
       await deadLetters.save({
         dlqEventId: 'dlq-1',
         jobId: 'job-1',
@@ -226,6 +246,23 @@ describeRealInfra('Real infrastructure adapter contracts', () => {
         firstSeenAt: now,
         lastSeenAt: now,
         retentionUntil: new Date('2026-09-21T12:00:00.000Z')
+      });
+      await telemetry.save({
+        telemetryEventId: 'telemetry-1',
+        kind: 'span',
+        serviceName: 'document-parser-orchestrator-api',
+        traceId: 'trace-1',
+        jobId: 'job-1',
+        documentId: 'doc-1',
+        attemptId: 'attempt-1',
+        operation: 'submit_document',
+        spanName: 'orchestrator.submit_document',
+        attributes: { jobId: 'job-1' },
+        startedAt: now,
+        endedAt: now,
+        status: 'ok',
+        occurredAt: now,
+        retentionUntil: new Date('2026-04-24T12:00:00.000Z')
       });
     });
 
@@ -253,6 +290,8 @@ describeRealInfra('Real infrastructure adapter contracts', () => {
     await expect(deadLetters.findById('dlq-1')).resolves.toMatchObject({
       jobId: 'job-1'
     });
+    await expect(artifacts.listByJobId('job-1')).resolves.toHaveLength(1);
+    await expect(telemetry.listByJobId('job-1')).resolves.toHaveLength(1);
   });
 
   it('rolls back Mongo writes when the unit of work fails', async () => {
@@ -345,8 +384,10 @@ describeRealInfra('Real infrastructure adapter contracts', () => {
       'dead_letter_events',
       'documents',
       'job_attempts',
+      'page_artifacts',
       'processing_jobs',
-      'processing_results'
+      'processing_results',
+      'telemetry_events'
     ]);
     expect(collectionNames).not.toContain('templates');
     expect(collectionNames).not.toContain('template_versions');
@@ -373,6 +414,8 @@ describeRealInfra('Real infrastructure adapter contracts', () => {
     const auditIndexes = await database.collection('audit_events').indexes();
     const resultIndexes = await database.collection('processing_results').indexes();
     const deadLetterIndexes = await database.collection('dead_letter_events').indexes();
+    const artifactIndexes = await database.collection('page_artifacts').indexes();
+    const telemetryIndexes = await database.collection('telemetry_events').indexes();
 
     expect(auditIndexes).toEqual(
       expect.arrayContaining([
@@ -396,6 +439,34 @@ describeRealInfra('Real infrastructure adapter contracts', () => {
     );
     expect(deadLetterIndexes).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({
+          key: { retentionUntil: 1 },
+          expireAfterSeconds: 0
+        })
+      ])
+    );
+    expect(artifactIndexes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: { retentionUntil: 1 },
+          expireAfterSeconds: 0
+        })
+      ])
+    );
+    expect(telemetryIndexes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: { jobId: 1, occurredAt: 1 }
+        }),
+        expect.objectContaining({
+          key: { traceId: 1, occurredAt: 1 }
+        }),
+        expect.objectContaining({
+          key: { attemptId: 1, occurredAt: 1 }
+        }),
+        expect.objectContaining({
+          key: { serviceName: 1, occurredAt: 1 }
+        }),
         expect.objectContaining({
           key: { retentionUntil: 1 },
           expireAfterSeconds: 0
