@@ -4,6 +4,59 @@ Todas as mudancas relevantes deste repositorio devem ser registradas aqui.
 
 O formato segue uma adaptacao simples de `Keep a Changelog` e usa as tags de contexto dos commits como apoio para rastreabilidade.
 
+## [2026-03-26] - Painel operacional e telemetria consultavel por job
+
+### Added
+
+- Read model `telemetry_events` para logs, metricas e spans correlacionados por `jobId`, `attemptId` e `traceId`, com implementacoes `in-memory` e `Mongo`.
+- Fan-out de observabilidade no runtime da `orchestrator-api` e do `document-processing-worker`, preservando o sink atual e persistindo uma copia consultavel em Mongo no modo `real`.
+- Endpoint interno `GET /v1/ops/jobs/{jobId}/context` e pagina HTML `GET /ops/jobs/{jobId}` para inspecao operacional manual por job.
+- Query operacional na `orchestrator-api` para agregar `job`, `attempts`, `result`, `audit_events`, `dead_letter_events`, `page_artifacts`, `traceIds`, `timeline` e `telemetry_events`.
+- Servico de preview redigido de artefatos, com `previewText` truncado para `OCR_JSON`, `MASKED_TEXT`, `LLM_PROMPT` e `LLM_RESPONSE`.
+- Cobertura adicional de aplicacao, E2E e contratos reais para o painel operacional, fan-out de telemetria e indices TTL/correlacao de `telemetry_events`.
+- Runner raiz `tooling/scripts/run-all-tests.cjs` para consolidar a execucao dos grupos de Jest e imprimir um resumo final unico.
+
+### Changed
+
+- `RetentionPolicyService` passou a definir retencao de `30 dias` para telemetria consultavel, e `RedactionPolicyService` ganhou mascaramento dedicado para previews de leitura.
+- Casos de uso da `orchestrator-api` passaram a emitir correladores operacionais consistentes (`jobId`, `documentId`, `attemptId`, `operation`) em logs, metricas e spans.
+- `ProcessJobMessageUseCase` e a pipeline OCR/LLM do worker passaram a abrir spans de stage para `context_load`, `attempt_start`, `extraction`, `success_persist`, `failure_recovery`, `page_extraction`, `fallback_resolution` e `outcome_assembly`.
+- A leitura operacional da API passou a consultar `page_artifacts` e `telemetry_events` por filtros especificos, evitando `list()` global no caminho do painel.
+- `README.md`, `docs/database-schemas.md` e `docs/ddd/06-audit-observability.md` foram realinhados ao estado real do painel operacional e da telemetria persistida.
+
+### Fixed
+
+- O MVP deixou de depender apenas de console ou exporter OTLP para inspecao operacional; agora a trilha por job fica consultavel no proprio produto.
+- Artefatos operacionais deixaram de expor `rawText`, `rawPayload`, `promptText` e `responseText` no endpoint JSON e na pagina HTML.
+- As suites reais de infraestrutura passaram a proteger a existencia das colecoes `page_artifacts` e `telemetry_events`, incluindo seus indices de TTL e correlacao.
+- O script raiz de testes voltou a produzir um resumo consolidado dos grupos de Jest sem depender de encadeamento shell no `package.json`.
+
+### Technical Notes
+
+- O painel continua interno e reutiliza os mesmos limites de leitura do MVP; nao houve novo papel RBAC nesta fase.
+- O fluxo distribuido continua centrado em `traceId` proprio, sem arvore completa de spans OpenTelemetry entre todos os hops.
+- Os endpoints externos de parsing nao tiveram breaking change; a superficie nova ficou restrita aos caminhos `GET /v1/ops/jobs/{jobId}/context` e `GET /ops/jobs/{jobId}`.
+
+### Commit Contexts
+
+- `feat(shared-telemetry-fanout)`
+- `feat(orchestrator-ops-contracts)`
+- `feat(orchestrator-ops-http-contracts)`
+- `feat(orchestrator-ops-query)`
+- `feat(orchestrator-ops-runtime)`
+- `feat(orchestrator-ops-mongo)`
+- `bug(orchestrator-ops-instrumentation-a)`
+- `bug(orchestrator-ops-instrumentation-b)`
+- `feat(orchestrator-ops-tests)`
+- `feat(worker-telemetry-contracts)`
+- `feat(worker-telemetry-runtime)`
+- `feat(worker-stage-instrumentation)`
+- `feat(worker-pipeline-observability)`
+- `feat(worker-telemetry-tests)`
+- `feat(test-runner)`
+- `docs(operational-panel)`
+- `docs(changelog)`
+
 ## [2026-03-25] - Hardening operacional da fase 3
 
 ### Added
