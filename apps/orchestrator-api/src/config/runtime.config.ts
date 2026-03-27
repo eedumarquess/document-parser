@@ -8,8 +8,10 @@ import {
   MongoDeadLetterRepositoryAdapter,
   MongoDocumentRepositoryAdapter,
   MongoJobAttemptRepositoryAdapter,
+  MongoPageArtifactRepositoryAdapter,
   MongoProcessingJobRepositoryAdapter,
-  MongoProcessingResultRepositoryAdapter
+  MongoProcessingResultRepositoryAdapter,
+  MongoTelemetryEventRepositoryAdapter
 } from '../adapters/out/repositories/mongodb.repositories';
 import { MongoDatabaseProvider, MongoSessionContext, MongoUnitOfWorkAdapter } from '../adapters/out/repositories/mongodb.provider';
 import { InMemoryBinaryStorageAdapter } from '../adapters/out/storage/in-memory-binary-storage.adapter';
@@ -21,6 +23,7 @@ import type { OrchestratorProviderOverrides } from '../app.module';
 type RuntimeMode = 'memory' | 'real';
 
 export function buildOrchestratorProviderOverridesFromEnv(): OrchestratorProviderOverrides {
+  const serviceName = process.env.OTEL_SERVICE_NAME?.trim() || 'document-parser-orchestrator-api';
   const mode = resolveRuntimeMode(
     process.env.ORCHESTRATOR_RUNTIME_MODE ?? process.env.DOCUMENT_PARSER_RUNTIME_MODE ?? 'memory'
   );
@@ -28,7 +31,8 @@ export function buildOrchestratorProviderOverridesFromEnv(): OrchestratorProvide
   if (mode === 'memory') {
     const results = new InMemoryProcessingResultRepository();
     return {
-      ...buildObservabilityOverrides('document-parser-orchestrator-api'),
+      serviceName,
+      ...buildObservabilityOverrides(serviceName),
       storage: new InMemoryBinaryStorageAdapter(),
       documents: new InMemoryDocumentRepository(),
       jobs: new InMemoryProcessingJobRepository(),
@@ -46,7 +50,8 @@ export function buildOrchestratorProviderOverridesFromEnv(): OrchestratorProvide
   const results = new MongoProcessingResultRepositoryAdapter(mongoProvider, sessionContext);
 
   return {
-    ...buildObservabilityOverrides('document-parser-orchestrator-api'),
+    serviceName,
+    ...buildObservabilityOverrides(serviceName),
     storage: new MinioBinaryStorageAdapter({
       endPoint: getRequiredEnv('MINIO_ENDPOINT'),
       port: parseNumberEnv('MINIO_PORT'),
@@ -59,8 +64,10 @@ export function buildOrchestratorProviderOverridesFromEnv(): OrchestratorProvide
     jobs: new MongoProcessingJobRepositoryAdapter(mongoProvider, sessionContext),
     attempts: new MongoJobAttemptRepositoryAdapter(mongoProvider, sessionContext),
     results,
+    artifacts: new MongoPageArtifactRepositoryAdapter(mongoProvider, sessionContext),
     deadLetters: new MongoDeadLetterRepositoryAdapter(mongoProvider, sessionContext),
     compatibleResults: results,
+    telemetry: new MongoTelemetryEventRepositoryAdapter(mongoProvider, sessionContext),
     publisher: new RabbitMqJobPublisherAdapter(
       getRequiredEnv('RABBITMQ_URL'),
       getRequiredEnv('RABBITMQ_QUEUE_PROCESSING_REQUESTED')

@@ -1,5 +1,6 @@
 import { DynamicModule, Module, type Provider } from '@nestjs/common';
 import {
+  createFanOutObservabilityAdapters,
   JsonConsoleLoggingAdapter,
   JsonConsoleMetricsAdapter,
   JsonConsoleTracingAdapter,
@@ -7,6 +8,7 @@ import {
 } from '@document-parser/shared-kernel';
 import { DeadLettersController } from './adapters/in/http/dead-letters.controller';
 import { DocumentJobsController } from './adapters/in/http/document-jobs.controller';
+import { OperationalJobsController } from './adapters/in/http/operational-jobs.controller';
 import { SimpleRbacAuthorizationAdapter } from './adapters/out/auth/simple-rbac.adapter';
 import { RandomIdGeneratorAdapter } from './adapters/out/clock/random-id-generator.adapter';
 import { SystemClockAdapter } from './adapters/out/clock/system-clock.adapter';
@@ -16,16 +18,20 @@ import {
   InMemoryDeadLetterRepository,
   InMemoryDocumentRepository,
   InMemoryJobAttemptRepository,
+  InMemoryPageArtifactRepository,
   InMemoryProcessingJobRepository,
   InMemoryProcessingResultRepository,
+  InMemoryTelemetryEventRepository,
   InMemoryUnitOfWork
 } from './adapters/out/repositories/in-memory.repositories';
 import { InMemoryBinaryStorageAdapter } from './adapters/out/storage/in-memory-binary-storage.adapter';
 import { Sha256HashingAdapter } from './adapters/out/storage/sha256-hashing.adapter';
 import { SimplePageCounterAdapter } from './adapters/out/storage/simple-page-counter.adapter';
 import { GetJobStatusUseCase } from './application/use-cases/get-job-status.use-case';
+import { GetJobOperationalContextUseCase } from './application/use-cases/get-job-operational-context.use-case';
 import { GetProcessingResultUseCase } from './application/use-cases/get-processing-result.use-case';
 import { AuditEventRecorder } from './application/services/audit-event-recorder.service';
+import { ArtifactPreviewService } from './application/services/artifact-preview.service';
 import { DerivedJobOrchestrator } from './application/services/derived-job-orchestrator.service';
 import { QueuePublicationFailureHandler } from './application/services/queue-publication-failure-handler.service';
 import { ReplayDeadLetterUseCase } from './application/use-cases/replay-dead-letter.use-case';
@@ -46,8 +52,10 @@ import type {
   LoggingPort,
   MetricsPort,
   PageCounterPort,
+  PageArtifactRepositoryPort,
   ProcessingJobRepositoryPort,
   ProcessingResultRepositoryPort,
+  TelemetryEventRepositoryPort,
   TracingPort,
   UnitOfWorkPort
 } from './contracts/ports';
@@ -68,21 +76,32 @@ export type OrchestratorProviderOverrides = Partial<{
   jobs: ProcessingJobRepositoryPort;
   attempts: JobAttemptRepositoryPort;
   results: ProcessingResultRepositoryPort;
+  artifacts: PageArtifactRepositoryPort;
   deadLetters: DeadLetterRepositoryPort;
   compatibleResults: CompatibleResultLookupPort;
   publisher: JobPublisherPort;
   audit: AuditPort;
+  telemetry: TelemetryEventRepositoryPort;
   logging: LoggingPort;
   metrics: MetricsPort;
   tracing: TracingPort;
   authorization: AuthorizationPort;
   unitOfWork: UnitOfWorkPort;
+  serviceName: string;
 }>;
 
 @Module({})
 export class OrchestratorApiModule {
   public static register(overrides: OrchestratorProviderOverrides = {}): DynamicModule {
     const results = overrides.results ?? new InMemoryProcessingResultRepository();
+    const telemetry = overrides.telemetry ?? new InMemoryTelemetryEventRepository();
+    const observability = createFanOutObservabilityAdapters({
+      serviceName: overrides.serviceName ?? 'document-parser-orchestrator-api',
+      sink: telemetry,
+      logging: overrides.logging ?? new JsonConsoleLoggingAdapter(),
+      metrics: overrides.metrics ?? new JsonConsoleMetricsAdapter(),
+      tracing: overrides.tracing ?? new JsonConsoleTracingAdapter()
+    });
     const providers: Provider[] = [
       { provide: TOKENS.CLOCK, useValue: overrides.clock ?? new SystemClockAdapter() },
       { provide: TOKENS.ID_GENERATOR, useValue: overrides.idGenerator ?? new RandomIdGeneratorAdapter() },
@@ -94,6 +113,10 @@ export class OrchestratorApiModule {
       { provide: TOKENS.ATTEMPT_REPOSITORY, useValue: overrides.attempts ?? new InMemoryJobAttemptRepository() },
       { provide: TOKENS.RESULT_REPOSITORY, useValue: results },
       {
+        provide: TOKENS.PAGE_ARTIFACT_REPOSITORY,
+        useValue: overrides.artifacts ?? new InMemoryPageArtifactRepository()
+      },
+      {
         provide: TOKENS.DEAD_LETTER_REPOSITORY,
         useValue: overrides.deadLetters ?? new InMemoryDeadLetterRepository()
       },
@@ -101,12 +124,13 @@ export class OrchestratorApiModule {
         provide: TOKENS.COMPATIBLE_RESULT_LOOKUP,
         useValue: overrides.compatibleResults ?? results
       },
+      { provide: TOKENS.TELEMETRY_REPOSITORY, useValue: telemetry },
       { provide: TOKENS.UNIT_OF_WORK, useValue: overrides.unitOfWork ?? new InMemoryUnitOfWork() },
       { provide: TOKENS.JOB_PUBLISHER, useValue: overrides.publisher ?? new InMemoryJobPublisherAdapter() },
       { provide: TOKENS.AUDIT, useValue: overrides.audit ?? new InMemoryAuditRepository() },
-      { provide: TOKENS.LOGGING, useValue: overrides.logging ?? new JsonConsoleLoggingAdapter() },
-      { provide: TOKENS.METRICS, useValue: overrides.metrics ?? new JsonConsoleMetricsAdapter() },
-      { provide: TOKENS.TRACING, useValue: overrides.tracing ?? new JsonConsoleTracingAdapter() },
+      { provide: TOKENS.LOGGING, useValue: observability.logging },
+      { provide: TOKENS.METRICS, useValue: observability.metrics },
+      { provide: TOKENS.TRACING, useValue: observability.tracing },
       {
         provide: TOKENS.AUTHORIZATION,
         useValue: overrides.authorization ?? new SimpleRbacAuthorizationAdapter()
@@ -118,18 +142,20 @@ export class OrchestratorApiModule {
       RetentionPolicyService,
       RedactionPolicyService,
       AuditEventRecorder,
+      ArtifactPreviewService,
       QueuePublicationFailureHandler,
       DerivedJobOrchestrator,
       SubmitDocumentUseCase,
       GetJobStatusUseCase,
       GetProcessingResultUseCase,
+      GetJobOperationalContextUseCase,
       ReprocessDocumentUseCase,
       ReplayDeadLetterUseCase
     ];
 
     return {
       module: OrchestratorApiModule,
-      controllers: [DocumentJobsController, DeadLettersController],
+      controllers: [DocumentJobsController, DeadLettersController, OperationalJobsController],
       providers,
       exports: providers
     };

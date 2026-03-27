@@ -6,8 +6,10 @@ import type {
   DeadLetterRepositoryPort,
   DocumentRepositoryPort,
   JobAttemptRepositoryPort,
+  PageArtifactRepositoryPort,
   ProcessingJobRepositoryPort,
   ProcessingResultRepositoryPort,
+  TelemetryEventRepositoryPort,
   UnitOfWorkPort
 } from '../../../contracts/ports';
 import type {
@@ -15,6 +17,8 @@ import type {
   DeadLetterRecord,
   DocumentRecord,
   JobAttemptRecord,
+  OperationalTelemetryRecord,
+  PageArtifactRecord,
   ProcessingJobRecord,
   ProcessingResultRecord
 } from '../../../contracts/models';
@@ -124,6 +128,19 @@ export class InMemoryProcessingResultRepository
 }
 
 @Injectable()
+export class InMemoryPageArtifactRepository implements PageArtifactRepositoryPort {
+  private readonly artifacts: PageArtifactRecord[] = [];
+
+  public async saveMany(artifacts: PageArtifactRecord[]): Promise<void> {
+    this.artifacts.push(...artifacts);
+  }
+
+  public async listByJobId(jobId: string): Promise<PageArtifactRecord[]> {
+    return this.artifacts.filter((artifact) => artifact.jobId === jobId);
+  }
+}
+
+@Injectable()
 export class InMemoryUnitOfWork implements UnitOfWorkPort {
   public async runInTransaction<T>(work: () => Promise<T>): Promise<T> {
     return work();
@@ -145,6 +162,14 @@ export class InMemoryDeadLetterRepository implements DeadLetterRepositoryPort {
   public async list(): Promise<DeadLetterRecord[]> {
     return [...this.records.values()];
   }
+
+  public async listByJobId(jobId: string): Promise<DeadLetterRecord[]> {
+    return [...this.records.values()].filter((record) => record.jobId === jobId);
+  }
+
+  public async listByTraceId(traceId: string): Promise<DeadLetterRecord[]> {
+    return [...this.records.values()].filter((record) => record.traceId === traceId);
+  }
 }
 
 @Injectable()
@@ -157,5 +182,36 @@ export class InMemoryAuditRepository implements AuditPort {
 
   public async list(): Promise<AuditEventRecord[]> {
     return [...this.events];
+  }
+
+  public async listByJobId(jobId: string): Promise<AuditEventRecord[]> {
+    return this.events.filter(
+      (event) => event.aggregateId === jobId || event.metadata?.jobId === jobId
+    );
+  }
+
+  public async listByTraceId(traceId: string): Promise<AuditEventRecord[]> {
+    return this.events.filter((event) => event.traceId === traceId);
+  }
+}
+
+@Injectable()
+export class InMemoryTelemetryEventRepository implements TelemetryEventRepositoryPort {
+  private readonly events = new Map<string, OperationalTelemetryRecord>();
+
+  public async save(event: OperationalTelemetryRecord): Promise<void> {
+    this.events.set(event.telemetryEventId, event);
+  }
+
+  public async listByJobId(jobId: string): Promise<OperationalTelemetryRecord[]> {
+    return [...this.events.values()].filter((event) => event.jobId === jobId);
+  }
+
+  public async listByTraceId(traceId: string): Promise<OperationalTelemetryRecord[]> {
+    return [...this.events.values()].filter((event) => event.traceId === traceId);
+  }
+
+  public async listByAttemptId(attemptId: string): Promise<OperationalTelemetryRecord[]> {
+    return [...this.events.values()].filter((event) => event.attemptId === attemptId);
   }
 }
