@@ -2,7 +2,9 @@ import type {
   AuditActor,
   LogRecord,
   ProcessingJobRequestedMessage,
-  ProcessingOutcome
+  ProcessingOutcome,
+  TelemetryEventRecord,
+  TelemetryEventSinkPort
 } from '@document-parser/shared-kernel';
 import type {
   AuditEventRecord,
@@ -63,6 +65,12 @@ export interface AuditPort {
   list(): Promise<AuditEventRecord[]>;
 }
 
+export interface TelemetryEventRepositoryPort extends TelemetryEventSinkPort {
+  listByJobId(jobId: string): Promise<TelemetryEventRecord[]>;
+  listByTraceId(traceId: string): Promise<TelemetryEventRecord[]>;
+  listByAttemptId(attemptId: string): Promise<TelemetryEventRecord[]>;
+}
+
 export interface JobPublisherPort {
   publishRequested(message: ProcessingJobRequestedMessage): Promise<void>;
   publishRetry(message: ProcessingJobRequestedMessage, retryAttempt: number): Promise<void>;
@@ -105,6 +113,7 @@ export interface UnitOfWorkPort {
 export interface ExtractionPipelinePort {
   extract(input: {
     actor: AuditActor;
+    traceId: string;
     document: DocumentRecord;
     job: ProcessingJobRecord;
     attempt: JobAttemptRecord;

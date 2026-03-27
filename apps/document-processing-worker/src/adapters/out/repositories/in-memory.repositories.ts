@@ -7,6 +7,7 @@ import type {
   PageArtifactRepositoryPort,
   ProcessingJobRepositoryPort,
   ProcessingResultRepositoryPort,
+  TelemetryEventRepositoryPort,
   UnitOfWorkPort
 } from '../../../contracts/ports';
 import type {
@@ -18,6 +19,7 @@ import type {
   ProcessingJobRecord,
   ProcessingResultRecord
 } from '../../../contracts/models';
+import type { TelemetryEventRecord } from '@document-parser/shared-kernel';
 
 @Injectable()
 export class InMemoryDocumentRepository implements DocumentRepositoryPort {
@@ -128,6 +130,27 @@ export class InMemoryAuditRepository implements AuditPort {
 
   public async list(): Promise<AuditEventRecord[]> {
     return [...this.events];
+  }
+}
+
+@Injectable()
+export class InMemoryTelemetryEventRepository implements TelemetryEventRepositoryPort {
+  private readonly events = new Map<string, TelemetryEventRecord>();
+
+  public async save(event: TelemetryEventRecord): Promise<void> {
+    this.events.set(event.telemetryEventId, event);
+  }
+
+  public async listByJobId(jobId: string): Promise<TelemetryEventRecord[]> {
+    return [...this.events.values()].filter((event) => event.jobId === jobId);
+  }
+
+  public async listByTraceId(traceId: string): Promise<TelemetryEventRecord[]> {
+    return [...this.events.values()].filter((event) => event.traceId === traceId);
+  }
+
+  public async listByAttemptId(attemptId: string): Promise<TelemetryEventRecord[]> {
+    return [...this.events.values()].filter((event) => event.attemptId === attemptId);
   }
 }
 
