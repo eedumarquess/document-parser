@@ -1,13 +1,16 @@
 import type {
   AuditActor,
   LogRecord,
-  ProcessingJobRequestedMessage
+  ProcessingJobRequestedMessage,
+  TelemetryEventSinkPort
 } from '@document-parser/shared-kernel';
 import type {
   AuditEventRecord,
   DeadLetterRecord,
   DocumentRecord,
   JobAttemptRecord,
+  OperationalTelemetryRecord,
+  PageArtifactRecord,
   ProcessingJobRecord,
   ProcessingResultRecord,
   StorageReference,
@@ -64,10 +67,17 @@ export interface ProcessingResultRepositoryPort {
   save(result: ProcessingResultRecord): Promise<void>;
 }
 
+export interface PageArtifactRepositoryPort {
+  saveMany(artifacts: PageArtifactRecord[]): Promise<void>;
+  listByJobId(jobId: string): Promise<PageArtifactRecord[]>;
+}
+
 export interface DeadLetterRepositoryPort {
   save(record: DeadLetterRecord): Promise<void>;
   findById(dlqEventId: string): Promise<DeadLetterRecord | undefined>;
   list(): Promise<DeadLetterRecord[]>;
+  listByJobId(jobId: string): Promise<DeadLetterRecord[]>;
+  listByTraceId(traceId: string): Promise<DeadLetterRecord[]>;
 }
 
 export interface CompatibleResultLookupPort {
@@ -91,6 +101,8 @@ export interface JobPublisherPort {
 export interface AuditPort {
   record(event: AuditEventRecord): Promise<void>;
   list(): Promise<AuditEventRecord[]>;
+  listByJobId(jobId: string): Promise<AuditEventRecord[]>;
+  listByTraceId(traceId: string): Promise<AuditEventRecord[]>;
 }
 
 export interface LoggingPort {
@@ -127,4 +139,10 @@ export interface AuthorizationPort {
   ensureCanSubmit(actor: AuditActor): void;
   ensureCanRead(actor: AuditActor): void;
   ensureCanReprocess(actor: AuditActor): void;
+}
+
+export interface TelemetryEventRepositoryPort extends TelemetryEventSinkPort {
+  listByJobId(jobId: string): Promise<OperationalTelemetryRecord[]>;
+  listByTraceId(traceId: string): Promise<OperationalTelemetryRecord[]>;
+  listByAttemptId(attemptId: string): Promise<OperationalTelemetryRecord[]>;
 }

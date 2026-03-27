@@ -1,4 +1,9 @@
-import type { JobWarning, AuditActor } from '@document-parser/shared-kernel';
+import type {
+  ArtifactReference,
+  AuditActor,
+  JobWarning,
+  TelemetryEventRecord
+} from '@document-parser/shared-kernel';
 
 export type {
   DeadLetterRecord,
@@ -48,17 +53,12 @@ export type AuditEventRecord = {
   retentionUntil: Date;
 };
 
-export type PageArtifactRecord = {
-  artifactId: string;
-  artifactType: string;
-  storageBucket: string;
-  storageObjectKey: string;
-  mimeType: string;
-  pageNumber?: number;
-  metadata?: Record<string, unknown>;
+export type PageArtifactRecord = ArtifactReference & {
   documentId: string;
   jobId: string;
   createdAt: Date;
   retentionUntil: Date;
   warnings?: JobWarning[];
 };
+
+export type OperationalTelemetryRecord = TelemetryEventRecord;
