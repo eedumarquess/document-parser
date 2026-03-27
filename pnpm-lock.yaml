@@ -50,6 +50,9 @@ importers:
 
   apps/document-processing-worker:
     dependencies:
+      '@document-parser/document-processing-domain':
+        specifier: workspace:*
+        version: link:../../packages/document-processing-domain
       '@document-parser/shared-kernel':
         specifier: workspace:*
         version: link:../../packages/shared-kernel
@@ -84,6 +87,9 @@ importers:
 
   apps/orchestrator-api:
     dependencies:
+      '@document-parser/document-processing-domain':
+        specifier: workspace:*
+        version: link:../../packages/document-processing-domain
       '@document-parser/shared-kernel':
         specifier: workspace:*
         version: link:../../packages/shared-kernel
@@ -122,10 +128,19 @@ importers:
         specifier: ^5.0.1
         version: 5.0.6
 
+  packages/document-processing-domain:
+    dependencies:
+      '@document-parser/shared-kernel':
+        specifier: workspace:*
+        version: link:../shared-kernel
+
   packages/shared-kernel: {}
 
   packages/testkit:
     dependencies:
+      '@document-parser/document-processing-domain':
+        specifier: workspace:*
+        version: link:../document-processing-domain
       '@document-parser/shared-kernel':
         specifier: workspace:*
         version: link:../shared-kernel
