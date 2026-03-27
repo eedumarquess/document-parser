@@ -108,6 +108,7 @@ O repositorio ja contem:
 O estado atual do repositorio ja inclui os pilares principais da fase 3:
 
 - observabilidade via `LoggingPort`, `MetricsPort` e `TracingPort`, com adapters locais por default e export opcional via `OTLP/HTTP`
+- persistencia consultavel de telemetria em `telemetry_events`, com fan-out para o sink configurado e para Mongo no runtime `real`
 - `RedactionPolicyService` centralizado para `audit`, `log`, `dead_letter` e `artifact`, com redacao por chave e por conteudo sensivel
 - timeout, limite de concorrencia e retry nos adapters LLM remotos
 - suites reais de infraestrutura com `testcontainers`, protegidas por `RUN_REAL_INFRA_TESTS=true`
@@ -120,6 +121,7 @@ Observabilidade:
 - `OTEL_EXPORTER_OTLP_ENDPOINT`
 - `OTEL_EXPORTER_OTLP_HEADERS`
 - `OTEL_SERVICE_NAME`
+- `RUN_REAL_INFRA_TESTS=true`
 
 Fallback LLM remoto:
 
@@ -136,6 +138,19 @@ Fallback LLM remoto:
 - `GET /v1/parsing/jobs/{jobId}`
 - `GET /v1/parsing/jobs/{jobId}/result`
 - `POST /v1/parsing/jobs/{jobId}/reprocess`
+- `GET /v1/ops/jobs/{jobId}/context`
+- `GET /ops/jobs/{jobId}`
+
+### Painel operacional por job
+
+O MVP agora expoe um caminho interno de leitura operacional centrado em `jobId`.
+
+- `GET /v1/ops/jobs/{jobId}/context` retorna o contexto operacional agregado em JSON
+- `GET /ops/jobs/{jobId}` renderiza uma pagina HTML simples para inspecao manual
+
+O contexto agrega `summary`, `attempts`, `result`, `auditEvents`, `deadLetters`, `artifacts`, `traceIds`, `timeline` e telemetria correlacionada por `serviceName`, `traceId` e `attemptId`.
+
+As previas de artefatos sao geradas no read path. O JSON e o HTML nunca devolvem `rawText`, `rawPayload`, `promptText` ou `responseText` crus.
 
 ### Resposta minima na criacao do job
 

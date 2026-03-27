@@ -119,9 +119,10 @@ Indices sugeridos: `resultId` unico, `jobId`, `documentId`, `status`, `compatibi
 | `mimeType` | `string` | Sim | MIME do artefato |
 | `checksum` | `string` | Nao | Hash do artefato |
 | `metadata` | `object` | Nao | Metadados livres por tipo |
+| `retentionUntil` | `date` | Sim | Data limite de retencao do artefato |
 | `createdAt` | `date` | Sim | Data de criacao |
 
-Indices sugeridos: `artifactId` unico, `documentId`, `jobId`, `pageNumber`, `artifactType`.
+Indices sugeridos: `artifactId` unico, `documentId`, `jobId + createdAt`, `pageNumber`, `artifactType`, TTL em `retentionUntil`.
 
 ## `audit_events`
 
@@ -137,8 +138,9 @@ Indices sugeridos: `artifactId` unico, `documentId`, `jobId`, `pageNumber`, `art
 | `metadata` | `object` | Nao | Metadados operacionais |
 | `redactedPayload` | `object` | Nao | Payload auditavel sem PII em claro |
 | `createdAt` | `date` | Sim | Momento do evento |
+| `retentionUntil` | `date` | Sim | Data limite de retencao do evento |
 
-Indices sugeridos: `eventId` unico, `eventType`, `aggregateType`, `aggregateId`, `createdAt`.
+Indices sugeridos: `eventId` unico, `eventType`, `aggregateType + aggregateId`, `traceId`, TTL em `retentionUntil`.
 
 ## `dead_letter_events`
 
@@ -159,8 +161,54 @@ Indices sugeridos: `eventId` unico, `eventType`, `aggregateType`, `aggregateId`,
 | `lastSeenAt` | `date` | Sim | Ultima ocorrencia |
 | `replayedAt` | `date` | Nao | Momento de replay manual |
 | `resolvedAt` | `date` | Nao | Momento de encerramento |
+| `retentionUntil` | `date` | Sim | Data limite de retencao do evento |
 
-Indices sugeridos: `dlqEventId` unico, `jobId`, `reasonCode`, `lastSeenAt`.
+Indices sugeridos: `dlqEventId` unico, `jobId`, `traceId`, `reasonCode`, `lastSeenAt`, TTL em `retentionUntil`.
+
+## `telemetry_events`
+
+Colecao de leitura operacional para logs, metricas e spans correlacionados por job.
+
+| Campo | Tipo | Obrigatorio | Descricao |
+| --- | --- | --- | --- |
+| `_id` | `ObjectId` | Sim | Identificador interno do evento |
+| `telemetryEventId` | `string` | Sim | ID publico do evento |
+| `kind` | `string` | Sim | `log`, `metric` ou `span` |
+| `serviceName` | `string` | Sim | Servico emissor |
+| `traceId` | `string` | Nao | Correlacao distribuida |
+| `jobId` | `string` | Nao | Job relacionado |
+| `documentId` | `string` | Nao | Documento relacionado |
+| `attemptId` | `string` | Nao | Tentativa relacionada |
+| `operation` | `string` | Nao | Operacao de negocio ou nome do stage |
+| `occurredAt` | `date` | Sim | Momento do evento |
+| `retentionUntil` | `date` | Sim | Data limite de retencao |
+| `level` | `string` | Nao | Nivel do log, quando `kind=log` |
+| `message` | `string` | Nao | Mensagem estruturada, quando `kind=log` |
+| `data` | `object` | Nao | Dados redigidos do log, quando `kind=log` |
+| `metricName` | `string` | Nao | Nome da metrica, quando `kind=metric` |
+| `metricType` | `string` | Nao | `counter`, `gauge` ou `histogram`, quando `kind=metric` |
+| `value` | `number` | Nao | Valor da metrica, quando `kind=metric` |
+| `unit` | `string` | Nao | Unidade opcional da metrica |
+| `tags` | `object` | Nao | Tags da metrica, quando `kind=metric` |
+| `spanName` | `string` | Nao | Nome do span, quando `kind=span` |
+| `attributes` | `object` | Nao | Atributos do span, quando `kind=span` |
+| `startedAt` | `date` | Nao | Inicio do span, quando `kind=span` |
+| `endedAt` | `date` | Nao | Fim do span, quando `kind=span` |
+| `status` | `string` | Nao | `ok` ou `error`, quando `kind=span` |
+| `errorMessage` | `string` | Nao | Resumo do erro do span |
+
+Indices sugeridos: `telemetryEventId` unico, `jobId + occurredAt`, `traceId + occurredAt`, `attemptId + occurredAt`, `serviceName + occurredAt`, TTL em `retentionUntil`.
+
+## Leitura operacional por job
+
+Os endpoints internos da `orchestrator-api` leem estas colecoes para montar o contexto operacional:
+
+- `GET /v1/ops/jobs/{jobId}/context`
+- `GET /ops/jobs/{jobId}`
+
+O read path agrega `processing_jobs`, `job_attempts`, `processing_results`, `audit_events`, `dead_letter_events`, `page_artifacts` e `telemetry_events`.
+
+As previas de artefatos sao calculadas em leitura e devem excluir `rawText`, `rawPayload`, `promptText` e `responseText` do payload retornado.
 
 ## Fora do MVP
 

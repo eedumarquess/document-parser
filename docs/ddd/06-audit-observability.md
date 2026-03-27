@@ -2,16 +2,17 @@
 
 ## Objetivo
 
-Documentar a trilha operacional realmente implementada no repositorio hoje: auditoria, redacao, correlacao por `traceId`, retry, DLQ e observabilidade via ports com backend local ou `OTLP/HTTP`.
+Documentar a trilha operacional realmente implementada no repositorio hoje: auditoria, redacao, correlacao por `traceId`, retry, DLQ, telemetria consultavel por job e observabilidade via ports com backend local ou `OTLP/HTTP`.
 
 ## Estado atual no codigo
 
-O contexto atual ja entrega auditoria, retencao, redacao e uma stack de observabilidade vendor-agnostic.
+O contexto atual entrega auditoria, retencao, redacao e uma stack de observabilidade vendor-agnostic com persistencia consultavel em Mongo.
 
 Capacidades realmente implementadas:
 
 - auditoria persistida em `audit_events`
 - registro operacional de falhas terminais em `dead_letter_events`
+- telemetria persistida em `telemetry_events`
 - retry dirigido por politica nomeada (`RetryPolicyService`)
 - topologia RabbitMQ com fila principal, filas de retry por TTL e broker DLQ
 - persistencia de estados operacionais em `processing_jobs` e `job_attempts`
@@ -19,9 +20,12 @@ Capacidades realmente implementadas:
 - `MetricsPort`
 - `TracingPort`
 - `traceId` em contratos HTTP, publicacao de fila, auditoria e DLQ
+- correlacao consistente por `jobId`, `documentId`, `attemptId` e `traceId` em logs, metricas e spans
 - correlacao entre `orchestrator-api`, `RabbitMQ` e `document-processing-worker`
 - replay manual de `dead_letter_events`
-- politica canonica de retencao para `audit_events`, `dead_letter_events`, `processing_results` e `page_artifacts`
+- endpoint JSON `GET /v1/ops/jobs/{jobId}/context` para leitura operacional agregada
+- painel HTML `GET /ops/jobs/{jobId}` para inspecao manual
+- politica canonica de retencao para `audit_events`, `dead_letter_events`, `processing_results`, `page_artifacts` e `telemetry_events`
 - redacao centralizada por contexto com `RedactionPolicyService`
 - backend opcional de export via `OTLP/HTTP`, mantendo adapters locais como fallback
 
@@ -60,6 +64,27 @@ Campos realmente persistidos:
 - `replayedAt`
 - `retentionUntil`
 
+### `TelemetryEventRecord`
+
+Campos comuns realmente persistidos:
+
+- `telemetryEventId`
+- `kind`
+- `serviceName`
+- `traceId`
+- `jobId`
+- `documentId`
+- `attemptId`
+- `operation`
+- `occurredAt`
+- `retentionUntil`
+
+Payload por tipo:
+
+- `log`: `level`, `message`, `data`
+- `metric`: `metricName`, `metricType`, `value`, `unit`, `tags`
+- `span`: `spanName`, `attributes`, `startedAt`, `endedAt`, `status`, `errorMessage`
+
 ## Eventos de auditoria implementados hoje
 
 ### `orchestrator-api`
@@ -76,6 +101,7 @@ Eventos gravados:
 - `JOB_REPROCESSING_REQUESTED`
 - `DEAD_LETTER_REPLAY_REQUESTED`
 - `DEAD_LETTER_REPLAY_COMPLETED`
+- `JOB_OPERATIONAL_CONTEXT_QUERIED`
 
 ### `document-processing-worker`
 
@@ -91,7 +117,9 @@ Eventos gravados:
 - Quando um binario novo e persistido, o sistema gera `DOCUMENT_STORED`.
 - Quando o job entra na fila principal, o sistema gera `PROCESSING_JOB_QUEUED`.
 - Quando ha reaproveitamento por compatibilidade, o sistema gera `COMPATIBLE_RESULT_REUSED`.
+- Consulta de status gera `JOB_STATUS_QUERIED`.
 - Consulta de resultado final gera `RESULT_QUERIED`.
+- Consulta do contexto operacional gera `JOB_OPERATIONAL_CONTEXT_QUERIED`.
 - Reprocessamento manual gera `JOB_REPROCESSING_REQUESTED`.
 - Conclusao bem-sucedida do worker gera `PROCESSING_COMPLETED`.
 - Retry agendado pelo worker gera `PROCESSING_RETRY_SCHEDULED`.
@@ -136,7 +164,7 @@ Fluxo terminal atual:
 
 ### Retry intra-provider no fallback LLM remoto
 
-Os adapters remotos de LLM agora aplicam um hardening proprio, independente do retry de job:
+Os adapters remotos de LLM aplicam um hardening proprio, independente do retry de job:
 
 - timeout por request com `AbortController`
 - concorrencia limitada por `LLM_MAX_CONCURRENCY`
@@ -150,6 +178,47 @@ Configuracao suportada:
 - `LLM_MAX_RETRIES`
 - `LLM_RETRY_BASE_DELAY_MS`
 
+## Painel operacional por job
+
+O read model operacional atual e montado pela `orchestrator-api` por `jobId`.
+
+Contratos expostos:
+
+- `GET /v1/ops/jobs/{jobId}/context`
+- `GET /ops/jobs/{jobId}`
+
+Dados agregados hoje:
+
+- `summary`
+- `attempts`
+- `result`
+- `auditEvents`
+- `deadLetters`
+- `artifacts`
+- `traceIds`
+- `timeline`
+- `telemetry`
+
+Fontes consultadas:
+
+- `processing_jobs`
+- `job_attempts`
+- `processing_results`
+- `audit_events`
+- `dead_letter_events`
+- `page_artifacts`
+- `telemetry_events`
+
+### Redacao no read path
+
+As previas operacionais de artefatos sao geradas no momento da leitura, sem alterar o schema persistido.
+
+Regras efetivas:
+
+- `OCR_JSON`, `MASKED_TEXT`, `LLM_PROMPT` e `LLM_RESPONSE` geram `previewText` truncado e semanticamente mascarado
+- `rawText`, `rawPayload`, `promptText` e `responseText` nao saem no JSON nem no HTML
+- artefatos binarios como `RENDERED_IMAGE` ficam restritos a metadados
+
 ## Fronteira do contexto hoje
 
 ### `orchestrator-api`
@@ -161,8 +230,10 @@ Responsabilidades implementadas:
 - auditar reaproveitamento de resultado compativel
 - auditar consulta de status
 - auditar consulta de resultado
+- auditar consulta do contexto operacional
 - auditar solicitacao de reprocessamento
 - replay manual de DLQ
+- servir o painel operacional por `jobId`
 
 ### `document-processing-worker`
 
@@ -174,6 +245,8 @@ Responsabilidades implementadas:
 - agendar retry
 - persistir DLQ de aplicacao
 - auditar falha terminal
+- emitir spans de stage para `context_load`, `attempt_start`, `extraction`, `success_persist` e `failure_recovery`
+- emitir spans e metricas para `page_extraction`, `fallback_resolution` e `outcome_assembly`
 
 ## Dados sensiveis no estado atual
 
@@ -190,6 +263,7 @@ Responsabilidades implementadas:
 - `metadata` persistido deve privilegiar ids, enums, contagens, versoes e timestamps
 - texto livre e snapshots de erro devem ser saneados antes de log, auditoria ou DLQ
 - artefatos e payloads brutos continuam separados do canal de auditoria
+- o painel operacional nunca deve devolver previews com PII, tokens ou blobs crus
 
 ### O que ainda exige cuidado arquitetural
 
@@ -207,6 +281,7 @@ O `RetentionPolicyService` implementa hoje:
 - `90 dias` para `processing_results`
 - `90 dias` para `page_artifacts` do tipo `OCR_JSON`
 - `30 dias` para os demais `page_artifacts`
+- `30 dias` para `telemetry_events`
 
 Os adapters Mongo criam indices TTL para as colecoes com `retentionUntil`.
 
@@ -216,6 +291,8 @@ Os adapters Mongo criam indices TTL para as colecoes com `retentionUntil`.
 
 - `AuditPort`
 - `DeadLetterRepositoryPort`
+- `PageArtifactRepositoryPort`
+- `TelemetryEventRepositoryPort`
 - `JobPublisherPort`
 - `ProcessingJobRepositoryPort`
 - `JobAttemptRepositoryPort`
@@ -229,24 +306,29 @@ Os adapters Mongo criam indices TTL para as colecoes com `retentionUntil`.
 ### Componentes que materializam o comportamento atual
 
 - `SubmitDocumentUseCase`
+- `GetJobStatusUseCase`
 - `GetProcessingResultUseCase`
+- `GetJobOperationalContextUseCase`
 - `ReprocessDocumentUseCase`
 - `ProcessJobMessageUseCase`
 - `RetryPolicyService`
 - `RabbitMqJobPublisherAdapter`
 - `RabbitMqProcessingJobListener`
 - `ReplayDeadLetterUseCase`
+- `ArtifactPreviewService`
 - `RedactionPolicyService`
 - `RetentionPolicyService`
 - adapters locais de observabilidade
 - adapters `OTLP/HTTP` de observabilidade
+- adapters fan-out de observabilidade com persistencia consultavel em `telemetry_events`
 
 ## Observabilidade em runtime
 
 Configuracao atual:
 
-- `OBSERVABILITY_MODE=local` usa adapters em memoria/console e preserva o comportamento local
+- `OBSERVABILITY_MODE=local` usa adapters em memoria ou console e preserva o comportamento local
 - `OBSERVABILITY_MODE=otlp` ativa exportacao `OTLP/HTTP`
+- o runtime `real` faz fan-out para o exporter configurado e para `telemetry_events`
 - `OTEL_EXPORTER_OTLP_ENDPOINT` define o collector
 - `OTEL_EXPORTER_OTLP_HEADERS` injeta headers extras
 - `OTEL_SERVICE_NAME` sobrescreve o nome do servico
@@ -255,6 +337,7 @@ Comportamento de fallback:
 
 - configuracao ausente ou invalida para `otlp` cai de volta nos adapters locais
 - falhas de export nao derrubam os casos de uso
+- falhas ao persistir o read model de telemetria nao devem derrubar a operacao principal
 
 ## Suites reais de infraestrutura
 
@@ -265,14 +348,15 @@ Cobertura relevante:
 - `MongoDB` com indices operacionais e TTL
 - `MinIO` para binario original e artefatos
 - `RabbitMQ` com fila principal, retry e broker DLQ
+- persistencia e consulta de `telemetry_events`
 - fluxo ponta a ponta do worker, incluindo sucesso, retry e falha terminal
 
 ## Gaps explicitos remanescentes
 
 - collector `OTLP` ainda sem batching e retry dedicado do exporter
 - dashboards, alertas e SLOs ainda nao versionados no repositorio
-- consulta analitica de auditoria e DLQ ainda depende das colecoes operacionais
-- propagacao de contexto distribuido usa `traceId` proprio, nao um stack OpenTelemetry completa de headers entre todos os hops
+- o painel atual e orientado a `jobId` e nao oferece listagem global de jobs
+- propagacao de contexto distribuido usa `traceId` proprio, nao uma stack OpenTelemetry completa de headers entre todos os hops
 
 ## Criterio de alinhamento com o repositorio
 
@@ -280,6 +364,7 @@ Este documento estara coerente com o codigo enquanto todos os itens abaixo forem
 
 - auditoria for representada por `AuditEventRecord` com `aggregateType`, `aggregateId`, `traceId`, `metadata`, `redactedPayload` e `retentionUntil`
 - observabilidade continuar exposta por `LoggingPort`, `MetricsPort` e `TracingPort`
+- a telemetria consultavel continuar persistida em `TelemetryEventRecord`
 - o runtime aceitar `local` e `otlp` com fallback automatico para local
 - retry continuar governado por `RetryPolicyService`
 - os adapters remotos de LLM continuarem com timeout, concorrencia controlada e retry proprio
