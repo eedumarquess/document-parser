@@ -7,6 +7,10 @@ export class RetentionPolicyService {
     return addDays(now, 30);
   }
 
+  public calculateTelemetryRetentionUntil(now: Date): Date {
+    return addDays(now, 30);
+  }
+
   public calculateAuditRetentionUntil(now: Date): Date {
     return addDays(now, 180);
   }

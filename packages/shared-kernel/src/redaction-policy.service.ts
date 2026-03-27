@@ -50,6 +50,10 @@ export class RedactionPolicyService {
     return this.sanitizeMetadataValue(value, '', options.context ?? 'audit') as T;
   }
 
+  public maskTextPreview(value: string): string {
+    return this.redactString(value, 'previewText');
+  }
+
   private redactValue(value: unknown, path: string, context: RedactionContext): unknown {
     if (Buffer.isBuffer(value)) {
       return REDACTED_BINARY;
