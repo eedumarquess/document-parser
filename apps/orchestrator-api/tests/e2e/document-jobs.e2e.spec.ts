@@ -2,6 +2,7 @@ import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import {
+  ArtifactType,
   DEFAULT_OUTPUT_VERSION,
   DEFAULT_PIPELINE_VERSION,
   ExtractionWarning,
@@ -16,8 +17,10 @@ import {
   InMemoryDeadLetterRepository,
   InMemoryDocumentRepository,
   InMemoryJobAttemptRepository,
+  InMemoryPageArtifactRepository,
   InMemoryProcessingJobRepository,
-  InMemoryProcessingResultRepository
+  InMemoryProcessingResultRepository,
+  InMemoryTelemetryEventRepository
 } from '../../src/adapters/out/repositories/in-memory.repositories';
 import { InMemoryBinaryStorageAdapter } from '../../src/adapters/out/storage/in-memory-binary-storage.adapter';
 
@@ -34,6 +37,8 @@ describe('Document jobs e2e', () => {
   let deadLetters: InMemoryDeadLetterRepository;
   let jobs: InMemoryProcessingJobRepository;
   let attempts: InMemoryJobAttemptRepository;
+  let artifacts: InMemoryPageArtifactRepository;
+  let telemetry: InMemoryTelemetryEventRepository;
   let lastPublishedTraceId: string | undefined;
 
   const waitForJobStatus = async (jobId: string, expectedStatus: string) => {
@@ -60,8 +65,10 @@ describe('Document jobs e2e', () => {
     jobs = new InMemoryProcessingJobRepository();
     attempts = new InMemoryJobAttemptRepository();
     const results = new InMemoryProcessingResultRepository();
+    artifacts = new InMemoryPageArtifactRepository();
     deadLetters = new InMemoryDeadLetterRepository();
     audit = new InMemoryAuditRepository();
+    telemetry = new InMemoryTelemetryEventRepository();
     const publisher = new InMemoryJobPublisherAdapter();
     publisher.subscribe(async (message) => {
       lastPublishedTraceId = message.traceId;
@@ -101,6 +108,45 @@ describe('Document jobs e2e', () => {
         updatedAt: clock.now(),
         retentionUntil: new Date('2026-06-23T12:00:00.000Z')
       });
+      await artifacts.saveMany([
+        {
+          artifactId: `artifact-ocr-${job.jobId}`,
+          artifactType: ArtifactType.OCR_JSON,
+          storageBucket: 'artifacts',
+          storageObjectKey: `ocr/${job.jobId}/page-1.json`,
+          mimeType: 'application/json',
+          pageNumber: 1,
+          metadata: {
+            rawText: 'cpf 123.456.789-00 email paciente@example.com'
+          },
+          documentId: document.documentId,
+          jobId: job.jobId,
+          createdAt: clock.now(),
+          retentionUntil: new Date('2026-06-23T12:00:00.000Z')
+        }
+      ]);
+      await telemetry.save({
+        telemetryEventId: `telemetry-${job.jobId}`,
+        kind: 'span',
+        serviceName: 'document-parser-worker',
+        traceId: message.traceId,
+        jobId: job.jobId,
+        documentId: document.documentId,
+        attemptId: message.attemptId,
+        operation: 'extraction',
+        spanName: 'worker.extraction',
+        attributes: {
+          jobId: job.jobId,
+          documentId: document.documentId,
+          attemptId: message.attemptId,
+          operation: 'extraction'
+        },
+        startedAt: clock.now(),
+        endedAt: clock.now(),
+        status: 'ok',
+        occurredAt: clock.now(),
+        retentionUntil: new Date('2026-04-24T12:00:00.000Z')
+      });
     });
 
     const moduleRef = await Test.createTestingModule({
@@ -113,8 +159,10 @@ describe('Document jobs e2e', () => {
           jobs,
           attempts,
           results,
+          artifacts,
           deadLetters,
           audit,
+          telemetry,
           publisher
         })
       ]
@@ -386,5 +434,57 @@ describe('Document jobs e2e', () => {
     await expect(deadLetters.findById('dlq-replay-1')).resolves.toMatchObject({
       replayedAt: expect.any(Date)
     });
+  });
+
+  it('exposes the operational context JSON and redacted HTML panel for a completed job', async () => {
+    const createResponse = await request(app.getHttpServer())
+      .post('/v1/parsing/jobs')
+      .set('x-role', Role.OWNER)
+      .set('x-trace-id', 'trace-e2e-ops')
+      .attach('file', createPdfBuffer(1, 'conteudo operacional'), {
+        filename: 'ops.pdf',
+        contentType: 'application/pdf'
+      });
+
+    await waitForJobStatus(createResponse.body.jobId, 'COMPLETED');
+
+    const contextResponse = await request(app.getHttpServer())
+      .get(`/v1/ops/jobs/${createResponse.body.jobId}/context`)
+      .set('x-role', Role.OPERATOR);
+
+    expect(contextResponse.status).toBe(200);
+    expect(contextResponse.body).toMatchObject({
+      summary: {
+        jobId: createResponse.body.jobId,
+        documentId: createResponse.body.documentId,
+        status: 'COMPLETED'
+      },
+      traceIds: expect.arrayContaining(['trace-e2e-ops']),
+      artifacts: expect.arrayContaining([
+        expect.objectContaining({
+          artifactType: 'OCR_JSON',
+          previewText: 'cpf [cpf] email [email]'
+        })
+      ]),
+      telemetryEvents: expect.arrayContaining([
+        expect.objectContaining({
+          serviceName: 'document-parser-worker',
+          kind: 'span'
+        })
+      ])
+    });
+
+    const panelResponse = await request(app.getHttpServer())
+      .get(`/ops/jobs/${createResponse.body.jobId}`)
+      .set('x-role', Role.OPERATOR);
+
+    expect(panelResponse.status).toBe(200);
+    expect(panelResponse.headers['content-type']).toContain('text/html');
+    expect(panelResponse.text).toContain('Operational Context');
+    expect(panelResponse.text).toContain(createResponse.body.jobId);
+    expect(panelResponse.text).toContain('document-parser-worker');
+    expect(panelResponse.text).toContain('cpf [cpf] email [email]');
+    expect(panelResponse.text).not.toContain('123.456.789-00');
+    expect(panelResponse.text).not.toContain('paciente@example.com');
   });
 });

@@ -1,4 +1,6 @@
 import {
+  AttemptStatus,
+  ArtifactType,
   DEFAULT_OUTPUT_VERSION,
   DEFAULT_PIPELINE_VERSION,
   ExtractionWarning,
@@ -8,17 +10,24 @@ import {
   JobStatus,
   NotFoundError,
   RedactionPolicyService,
-  Role
+  Role,
+  type TelemetryEventRecord
 } from '@document-parser/shared-kernel';
 import { FixedClock, IncrementalIdGenerator, buildActor } from '@document-parser/testkit';
 import { SimpleRbacAuthorizationAdapter } from '../../src/adapters/out/auth/simple-rbac.adapter';
 import {
   InMemoryAuditRepository,
+  InMemoryDeadLetterRepository,
+  InMemoryJobAttemptRepository,
+  InMemoryPageArtifactRepository,
   InMemoryProcessingJobRepository,
-  InMemoryProcessingResultRepository
+  InMemoryProcessingResultRepository,
+  InMemoryTelemetryEventRepository
 } from '../../src/adapters/out/repositories/in-memory.repositories';
+import { GetJobOperationalContextUseCase } from '../../src/application/use-cases/get-job-operational-context.use-case';
 import { GetJobStatusUseCase } from '../../src/application/use-cases/get-job-status.use-case';
 import { GetProcessingResultUseCase } from '../../src/application/use-cases/get-processing-result.use-case';
+import { ArtifactPreviewService } from '../../src/application/services/artifact-preview.service';
 import type { ProcessingJobRecord, ProcessingResultRecord } from '../../src/contracts/models';
 import { RetentionPolicyService } from '../../src/domain/services/retention-policy.service';
 
@@ -139,6 +148,56 @@ const createResultDeliveryContext = () => {
   };
 };
 
+const createOperationalContext = () => {
+  const authorization = new SimpleRbacAuthorizationAdapter();
+  const clock = new FixedClock();
+  const idGenerator = new IncrementalIdGenerator();
+  const jobs = new InMemoryProcessingJobRepository();
+  const attempts = new InMemoryJobAttemptRepository();
+  const results = new InMemoryProcessingResultRepository();
+  const artifacts = new InMemoryPageArtifactRepository();
+  const deadLetters = new InMemoryDeadLetterRepository();
+  const audit = new InMemoryAuditRepository();
+  const telemetry = new InMemoryTelemetryEventRepository();
+  const logging = new InMemoryLoggingAdapter();
+  const metrics = new InMemoryMetricsAdapter();
+  const tracing = new InMemoryTracingAdapter();
+  const retentionPolicy = new RetentionPolicyService();
+  const redactionPolicy = new RedactionPolicyService();
+  const artifactPreviewService = new ArtifactPreviewService(redactionPolicy);
+
+  return {
+    jobs,
+    attempts,
+    results,
+    artifacts,
+    deadLetters,
+    audit,
+    telemetry,
+    logging,
+    metrics,
+    tracing,
+    useCase: new GetJobOperationalContextUseCase(
+      authorization,
+      clock,
+      idGenerator,
+      jobs,
+      attempts,
+      results,
+      artifacts,
+      deadLetters,
+      audit,
+      telemetry,
+      logging,
+      metrics,
+      tracing,
+      retentionPolicy,
+      redactionPolicy,
+      artifactPreviewService
+    )
+  };
+};
+
 describe('GetJobStatusUseCase', () => {
   it('returns the minimal job response for OWNER', async () => {
     const context = createResultDeliveryContext();
@@ -169,11 +228,11 @@ describe('GetJobStatusUseCase', () => {
       expect.objectContaining({
         eventType: 'JOB_STATUS_QUERIED',
         traceId: 'trace-status-owner',
-        metadata: {
+        metadata: expect.objectContaining({
           jobId: 'job-owner',
           documentId: 'doc-owner',
           status: JobStatus.COMPLETED
-        }
+        })
       })
     ]);
   });
@@ -260,10 +319,10 @@ describe('GetProcessingResultUseCase', () => {
         eventType: 'RESULT_QUERIED',
         traceId: 'trace-result-success',
         actor,
-        metadata: {
+        metadata: expect.objectContaining({
           jobId: 'job-result',
           documentId: 'doc-result'
-        }
+        })
       })
     ]);
     expect(context.logging.entries.at(-1)).toMatchObject({
@@ -350,5 +409,227 @@ describe('GetProcessingResultUseCase', () => {
         jobId: 'job-without-result'
       }
     });
+  });
+});
+
+describe('GetJobOperationalContextUseCase', () => {
+  it('aggregates job context, telemetry and redacted artifact previews for a completed job', async () => {
+    const context = createOperationalContext();
+    const job = buildJobRecord({
+      jobId: 'job-ops',
+      documentId: 'doc-ops',
+      status: JobStatus.COMPLETED,
+      queuedAt: new Date('2026-03-25T12:01:00.000Z'),
+      startedAt: new Date('2026-03-25T12:02:00.000Z'),
+      finishedAt: new Date('2026-03-25T12:03:00.000Z'),
+      ingestionTransitions: [
+        { status: JobStatus.RECEIVED, at: new Date('2026-03-25T12:00:00.000Z') },
+        { status: JobStatus.QUEUED, at: new Date('2026-03-25T12:01:00.000Z') }
+      ]
+    });
+    await context.jobs.save(job);
+    await context.attempts.save({
+      attemptId: 'attempt-ops-1',
+      jobId: job.jobId,
+      attemptNumber: 1,
+      pipelineVersion: DEFAULT_PIPELINE_VERSION,
+      status: AttemptStatus.COMPLETED,
+      fallbackUsed: true,
+      fallbackReason: 'CHECKBOX_AMBIGUOUS',
+      promptVersion: 'prompt-v1',
+      modelVersion: 'model-v1',
+      normalizationVersion: 'norm-v1',
+      latencyMs: 980,
+      startedAt: new Date('2026-03-25T12:02:00.000Z'),
+      finishedAt: new Date('2026-03-25T12:03:00.000Z'),
+      createdAt: new Date('2026-03-25T12:01:00.000Z')
+    });
+    await context.results.save(
+      buildResultRecord({
+        jobId: job.jobId,
+        documentId: job.documentId,
+        engineUsed: 'OCR+LLM'
+      })
+    );
+    await context.audit.record({
+      eventId: 'audit-ops-1',
+      eventType: 'PROCESSING_JOB_QUEUED',
+      aggregateType: 'PROCESSING_JOB',
+      aggregateId: job.jobId,
+      traceId: 'trace-ops-1',
+      actor: buildActor(),
+      metadata: { jobId: job.jobId, documentId: job.documentId },
+      redactedPayload: { jobId: job.jobId },
+      createdAt: new Date('2026-03-25T12:01:00.000Z'),
+      retentionUntil: new Date('2026-09-21T12:00:00.000Z')
+    });
+    await context.artifacts.saveMany([
+      {
+        artifactId: 'artifact-ops-ocr',
+        artifactType: ArtifactType.OCR_JSON,
+        storageBucket: 'artifacts',
+        storageObjectKey: 'ocr/job-ops/page-1.json',
+        mimeType: 'application/json',
+        pageNumber: 1,
+        metadata: {
+          rawText: 'cpf 123.456.789-00 email paciente@example.com'
+        },
+        documentId: job.documentId,
+        jobId: job.jobId,
+        createdAt: new Date('2026-03-25T12:03:00.000Z'),
+        retentionUntil: new Date('2026-06-23T12:00:00.000Z')
+      }
+    ]);
+
+    const telemetryEvent: TelemetryEventRecord = {
+      telemetryEventId: 'telemetry-ops-1',
+      kind: 'span',
+      serviceName: 'document-parser-worker',
+      traceId: 'trace-ops-1',
+      jobId: job.jobId,
+      documentId: job.documentId,
+      attemptId: 'attempt-ops-1',
+      operation: 'extraction',
+      spanName: 'worker.extraction',
+      attributes: { jobId: job.jobId, operation: 'extraction' },
+      startedAt: new Date('2026-03-25T12:02:10.000Z'),
+      endedAt: new Date('2026-03-25T12:02:40.000Z'),
+      status: 'ok',
+      occurredAt: new Date('2026-03-25T12:02:40.000Z'),
+      retentionUntil: new Date('2026-04-24T12:00:00.000Z')
+    };
+    await context.telemetry.save(telemetryEvent);
+
+    const response = await context.useCase.execute(
+      { jobId: job.jobId },
+      buildActor({ role: Role.OPERATOR }),
+      'trace-ops-query'
+    );
+
+    expect(response.summary).toMatchObject({
+      jobId: job.jobId,
+      documentId: job.documentId,
+      status: JobStatus.COMPLETED
+    });
+    expect(response.traceIds).toEqual(['trace-ops-1']);
+    expect(response.artifacts).toEqual([
+      expect.objectContaining({
+        artifactId: 'artifact-ops-ocr',
+        previewText: 'cpf [cpf] email [email]',
+        metadata: undefined
+      })
+    ]);
+    expect(response.telemetryEvents).toEqual([
+      expect.objectContaining({
+        telemetryEventId: 'telemetry-ops-1',
+        serviceName: 'document-parser-worker',
+        kind: 'span',
+        attemptId: 'attempt-ops-1'
+      })
+    ]);
+    expect(response.timeline).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: 'telemetry',
+          title: 'document-parser-worker span'
+        }),
+        expect.objectContaining({
+          source: 'result',
+          title: `Result ${JobStatus.COMPLETED}`
+        })
+      ])
+    );
+  });
+
+  it('includes retries and terminal dead-letter records in the operational context', async () => {
+    const context = createOperationalContext();
+    const job = buildJobRecord({
+      jobId: 'job-ops-dlq',
+      documentId: 'doc-ops-dlq',
+      status: JobStatus.FAILED,
+      warnings: [ExtractionWarning.ILLEGIBLE_CONTENT]
+    });
+    await context.jobs.save(job);
+    await context.attempts.save({
+      attemptId: 'attempt-ops-dlq-1',
+      jobId: job.jobId,
+      attemptNumber: 1,
+      pipelineVersion: DEFAULT_PIPELINE_VERSION,
+      status: AttemptStatus.FAILED,
+      fallbackUsed: false,
+      errorCode: 'TRANSIENT_FAILURE',
+      createdAt: new Date('2026-03-25T12:00:00.000Z')
+    });
+    await context.attempts.save({
+      attemptId: 'attempt-ops-dlq-2',
+      jobId: job.jobId,
+      attemptNumber: 2,
+      pipelineVersion: DEFAULT_PIPELINE_VERSION,
+      status: AttemptStatus.MOVED_TO_DLQ,
+      fallbackUsed: false,
+      errorCode: 'FATAL_FAILURE',
+      createdAt: new Date('2026-03-25T12:02:00.000Z')
+    });
+    await context.deadLetters.save({
+      dlqEventId: 'dlq-ops-1',
+      jobId: job.jobId,
+      attemptId: 'attempt-ops-dlq-2',
+      traceId: 'trace-ops-dlq-1',
+      queueName: 'document-processing.requested',
+      reasonCode: 'FATAL_FAILURE',
+      reasonMessage: 'retries exhausted',
+      retryCount: 2,
+      payloadSnapshot: { jobId: job.jobId },
+      firstSeenAt: new Date('2026-03-25T12:03:00.000Z'),
+      lastSeenAt: new Date('2026-03-25T12:03:00.000Z'),
+      retentionUntil: new Date('2026-09-21T12:00:00.000Z')
+    });
+    await context.telemetry.save({
+      telemetryEventId: 'telemetry-ops-dlq-1',
+      kind: 'metric',
+      serviceName: 'document-parser-worker',
+      traceId: 'trace-ops-dlq-1',
+      jobId: job.jobId,
+      documentId: job.documentId,
+      attemptId: 'attempt-ops-dlq-2',
+      operation: 'failure_recovery',
+      metricKind: 'counter',
+      name: 'worker.process_job_message.failed',
+      value: 1,
+      tags: {
+        jobId: job.jobId,
+        attemptId: 'attempt-ops-dlq-2',
+        operation: 'failure_recovery'
+      },
+      occurredAt: new Date('2026-03-25T12:03:00.000Z'),
+      retentionUntil: new Date('2026-04-24T12:00:00.000Z')
+    });
+
+    const response = await context.useCase.execute(
+      { jobId: job.jobId },
+      buildActor(),
+      'trace-ops-dlq-query'
+    );
+
+    expect(response.deadLetters).toEqual([
+      expect.objectContaining({
+        dlqEventId: 'dlq-ops-1',
+        reasonCode: 'FATAL_FAILURE'
+      })
+    ]);
+    expect(response.attempts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ attemptId: 'attempt-ops-dlq-1', status: 'FAILED' }),
+        expect.objectContaining({ attemptId: 'attempt-ops-dlq-2', status: 'MOVED_TO_DLQ' })
+      ])
+    );
+    expect(response.timeline).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: 'dead_letter',
+          title: 'DLQ FATAL_FAILURE'
+        })
+      ])
+    );
   });
 });

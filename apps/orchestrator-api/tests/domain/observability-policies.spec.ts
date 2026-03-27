@@ -1,8 +1,12 @@
 import { createServer } from 'http';
 import {
   ArtifactType,
+  InMemoryLoggingAdapter,
+  InMemoryMetricsAdapter,
+  InMemoryTracingAdapter,
   RedactionPolicyService,
   RetentionPolicyService,
+  createFanOutObservabilityAdapters,
   createOtlpHttpObservabilityAdapters
 } from '@document-parser/shared-kernel';
 
@@ -13,6 +17,7 @@ describe('Observability policies', () => {
     const policy = new RetentionPolicyService();
 
     expect(policy.calculateOriginalRetentionUntil(now)).toEqual(new Date('2026-04-24T12:00:00.000Z'));
+    expect(policy.calculateTelemetryRetentionUntil(now)).toEqual(new Date('2026-04-24T12:00:00.000Z'));
     expect(policy.calculateProcessingResultRetentionUntil(now)).toEqual(new Date('2026-06-23T12:00:00.000Z'));
     expect(policy.calculateAuditRetentionUntil(now)).toEqual(new Date('2026-09-21T12:00:00.000Z'));
     expect(policy.calculateDeadLetterRetentionUntil(now)).toEqual(new Date('2026-09-21T12:00:00.000Z'));
@@ -214,6 +219,86 @@ describe('OTLP observability adapters', () => {
               })
             ])
           })
+        })
+      ])
+    );
+  });
+});
+
+describe('Fan-out observability adapters', () => {
+  it('writes to the primary sink and the telemetry sink at the same time', async () => {
+    const logging = new InMemoryLoggingAdapter();
+    const metrics = new InMemoryMetricsAdapter();
+    const tracing = new InMemoryTracingAdapter();
+    const telemetry: unknown[] = [];
+
+    const adapters = createFanOutObservabilityAdapters({
+      serviceName: 'document-parser-test',
+      sink: {
+        async save(event) {
+          telemetry.push(event);
+        }
+      },
+      logging,
+      metrics,
+      tracing
+    });
+
+    await adapters.logging.log({
+      level: 'info',
+      message: 'fan out log',
+      context: 'fanout-test',
+      traceId: 'trace-fanout-1',
+      data: {
+        jobId: 'job-fanout-1',
+        documentId: 'doc-fanout-1',
+        attemptId: 'attempt-fanout-1',
+        operation: 'fanout_test'
+      },
+      recordedAt: new Date('2026-03-25T12:00:00.000Z')
+    });
+    await adapters.metrics.increment({
+      name: 'fanout.counter',
+      traceId: 'trace-fanout-1',
+      tags: {
+        jobId: 'job-fanout-1',
+        attemptId: 'attempt-fanout-1',
+        operation: 'fanout_test'
+      }
+    });
+    await adapters.tracing.runInSpan(
+      {
+        traceId: 'trace-fanout-1',
+        spanName: 'fanout.span',
+        attributes: {
+          jobId: 'job-fanout-1',
+          documentId: 'doc-fanout-1',
+          attemptId: 'attempt-fanout-1',
+          operation: 'fanout_test'
+        }
+      },
+      async () => 'ok'
+    );
+
+    expect(logging.entries).toHaveLength(1);
+    expect(metrics.records).toHaveLength(1);
+    expect(tracing.spans).toHaveLength(1);
+    expect(telemetry).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'log',
+          serviceName: 'document-parser-test',
+          jobId: 'job-fanout-1'
+        }),
+        expect.objectContaining({
+          kind: 'metric',
+          serviceName: 'document-parser-test',
+          attemptId: 'attempt-fanout-1'
+        }),
+        expect.objectContaining({
+          kind: 'span',
+          serviceName: 'document-parser-test',
+          documentId: 'doc-fanout-1'
         })
       ])
     );
