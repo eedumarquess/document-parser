@@ -43,16 +43,59 @@ export class ProcessJobMessageUseCase {
         let context: ProcessingMessageContext | undefined;
 
         try {
-          context = await this.contextLoader.load(message);
-          context = await this.attemptExecutionCoordinator.start(context, this.clock.now());
-          const execution = await this.attemptExecutionCoordinator.execute(context);
+          const loadedContext = await this.runStage(
+            {
+              traceId: message.traceId,
+              jobId: message.jobId,
+              documentId: message.documentId,
+              attemptId: message.attemptId,
+              operation: 'context_load',
+              spanName: 'worker.context_load'
+            },
+            () => this.contextLoader.load(message)
+          );
+          context = loadedContext;
+          const startedContext = await this.runStage(
+            {
+              traceId: message.traceId,
+              jobId: loadedContext.job.jobId,
+              documentId: loadedContext.document.documentId,
+              attemptId: loadedContext.attempt.attemptId,
+              operation: 'attempt_start',
+              spanName: 'worker.attempt_start'
+            },
+            () => this.attemptExecutionCoordinator.start(loadedContext, this.clock.now())
+          );
+          context = startedContext;
+          const execution = await this.runStage(
+            {
+              traceId: message.traceId,
+              jobId: startedContext.job.jobId,
+              documentId: startedContext.document.documentId,
+              attemptId: startedContext.attempt.attemptId,
+              operation: 'extraction',
+              spanName: 'worker.extraction'
+            },
+            () => this.attemptExecutionCoordinator.execute(startedContext)
+          );
           const completedAt = this.clock.now();
 
-          await this.successPersister.persist({
-            context: execution.context,
-            outcome: execution.outcome,
-            now: completedAt
-          });
+          await this.runStage(
+            {
+              traceId: message.traceId,
+              jobId: execution.context.job.jobId,
+              documentId: execution.context.document.documentId,
+              attemptId: execution.context.attempt.attemptId,
+              operation: 'success_persist',
+              spanName: 'worker.success_persist'
+            },
+            () =>
+              this.successPersister.persist({
+                context: execution.context,
+                outcome: execution.outcome,
+                now: completedAt
+              })
+          );
 
           await this.logging.log({
             level: 'info',
@@ -63,6 +106,8 @@ export class ProcessJobMessageUseCase {
               {
                 jobId: execution.context.job.jobId,
                 attemptId: execution.context.attempt.attemptId,
+                documentId: execution.context.document.documentId,
+                operation: 'process_job_message',
                 status: execution.outcome.status
               },
               {
@@ -73,15 +118,32 @@ export class ProcessJobMessageUseCase {
           });
           await this.metrics.increment({
             name: 'worker.process_job_message.succeeded',
-            traceId: message.traceId
+            traceId: message.traceId,
+            tags: this.buildTags({
+              jobId: execution.context.job.jobId,
+              documentId: execution.context.document.documentId,
+              attemptId: execution.context.attempt.attemptId,
+              operation: 'process_job_message'
+            })
           });
         } catch (error) {
           try {
-            const recovery = await this.failureRecovery.recover({
-              error,
-              context,
-              now: this.clock.now()
-            });
+            const recovery = await this.runStage(
+              {
+                traceId: message.traceId,
+                jobId: context?.job.jobId ?? message.jobId,
+                documentId: context?.document.documentId ?? message.documentId,
+                attemptId: context?.attempt.attemptId ?? message.attemptId,
+                operation: 'failure_recovery',
+                spanName: 'worker.failure_recovery'
+              },
+              () =>
+                this.failureRecovery.recover({
+                  error,
+                  context,
+                  now: this.clock.now()
+                })
+            );
 
             if (recovery === 'retry_scheduled') {
               await this.logging.log({
@@ -92,7 +154,9 @@ export class ProcessJobMessageUseCase {
                 data: this.redactionPolicy.redact(
                   {
                     jobId: context?.job.jobId ?? message.jobId,
-                    attemptId: context?.attempt.attemptId ?? message.attemptId
+                    attemptId: context?.attempt.attemptId ?? message.attemptId,
+                    documentId: context?.document.documentId ?? message.documentId,
+                    operation: 'failure_recovery'
                   },
                   {
                     context: 'log'
@@ -102,14 +166,26 @@ export class ProcessJobMessageUseCase {
               });
               await this.metrics.increment({
                 name: 'worker.process_job_message.retry_scheduled',
-                traceId: message.traceId
+                traceId: message.traceId,
+                tags: this.buildTags({
+                  jobId: context?.job.jobId ?? message.jobId,
+                  documentId: context?.document.documentId ?? message.documentId,
+                  attemptId: context?.attempt.attemptId ?? message.attemptId,
+                  operation: 'failure_recovery'
+                })
               });
               return;
             }
           } catch (handledError) {
             await this.metrics.increment({
               name: 'worker.process_job_message.failed',
-              traceId: message.traceId
+              traceId: message.traceId,
+              tags: this.buildTags({
+                jobId: context?.job.jobId ?? message.jobId,
+                documentId: context?.document.documentId ?? message.documentId,
+                attemptId: context?.attempt.attemptId ?? message.attemptId,
+                operation: 'process_job_message'
+              })
             });
             await this.logging.log({
               level: 'error',
@@ -128,6 +204,7 @@ export class ProcessJobMessageUseCase {
                     handledError instanceof IncompleteProcessingContextError
                       ? handledError.missingResources
                       : undefined,
+                  operation: 'process_job_message',
                   errorMessage: handledError instanceof Error ? handledError.message : 'Unexpected failure'
                 },
                 {
@@ -142,10 +219,53 @@ export class ProcessJobMessageUseCase {
           await this.metrics.recordHistogram({
             name: 'worker.process_job_message.duration_ms',
             value: Date.now() - startedAt,
-            traceId: message.traceId
+            traceId: message.traceId,
+            tags: this.buildTags({
+              jobId: context?.job.jobId ?? message.jobId,
+              documentId: context?.document.documentId ?? message.documentId,
+              attemptId: context?.attempt.attemptId ?? message.attemptId,
+              operation: 'process_job_message'
+            })
           });
         }
       }
+    );
+  }
+
+  private buildTags(input: {
+    jobId: string;
+    documentId: string;
+    attemptId: string;
+    operation: string;
+  }): Record<string, string> {
+    return {
+      jobId: input.jobId,
+      documentId: input.documentId,
+      attemptId: input.attemptId,
+      operation: input.operation
+    };
+  }
+
+  private async runStage<T>(input: {
+    traceId: string;
+    jobId: string;
+    documentId: string;
+    attemptId: string;
+    operation: string;
+    spanName: string;
+  }, work: () => Promise<T>): Promise<T> {
+    return this.tracing.runInSpan(
+      {
+        traceId: input.traceId,
+        spanName: input.spanName,
+        attributes: {
+          jobId: input.jobId,
+          documentId: input.documentId,
+          attemptId: input.attemptId,
+          operation: input.operation
+        }
+      },
+      work
     );
   }
 }

@@ -56,6 +56,7 @@ export class AttemptExecutionCoordinator {
       context,
       outcome: await this.extraction.extract({
         actor: input.job.requestedBy,
+        traceId: input.message.traceId,
         document: input.document,
         job: input.job,
         attempt: input.attempt,

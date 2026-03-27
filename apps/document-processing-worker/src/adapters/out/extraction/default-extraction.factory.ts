@@ -1,4 +1,5 @@
 import type { WorkerProviderOverrides } from '../../../app.module';
+import type { MetricsPort, TracingPort } from '../../../contracts/ports';
 import { HeuristicEvaluationService } from '../../../domain/extraction/heuristic-evaluation.service';
 import { SensitiveDataMaskingService } from '../../../domain/extraction/sensitive-data-masking.service';
 import { TextConsolidationService } from '../../../domain/extraction/text-consolidation.service';
@@ -18,7 +19,11 @@ import { resolveRemoteLlmExecutionConfigFromEnv } from './remote-llm-execution';
 
 export function createDefaultExtractionPipeline(
   policy: ProcessingOutcomePolicy,
-  overrides: WorkerProviderOverrides = {}
+  overrides: WorkerProviderOverrides = {},
+  observability?: {
+    metrics: MetricsPort;
+    tracing: TracingPort;
+  }
 ): OcrLlmExtractionPipelineAdapter {
   const normalization = new TextNormalizationService();
   const artifactReferenceFactory = new ArtifactReferenceFactory();
@@ -49,7 +54,8 @@ export function createDefaultExtractionPipeline(
       heuristicEvaluationService,
       textConsolidationService,
       llmExtraction
-    )
+    ),
+    observability
   );
 }
 
