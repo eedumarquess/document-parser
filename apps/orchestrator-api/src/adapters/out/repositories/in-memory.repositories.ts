@@ -1,5 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import { JobStatus } from '@document-parser/shared-kernel';
+import {
+  JobStatus,
+  QueuePublicationOutboxStatus,
+  type AttemptStatus,
+  type QueuePublicationOutboxRecord
+} from '@document-parser/shared-kernel';
 import type {
   AuditPort,
   CompatibleResultLookupPort,
@@ -9,6 +14,7 @@ import type {
   PageArtifactRepositoryPort,
   ProcessingJobRepositoryPort,
   ProcessingResultRepositoryPort,
+  QueuePublicationOutboxRepositoryPort,
   TelemetryEventRepositoryPort,
   UnitOfWorkPort
 } from '../../../contracts/ports';
@@ -55,6 +61,20 @@ export class InMemoryProcessingJobRepository implements ProcessingJobRepositoryP
     this.jobs.set(job.jobId, job);
   }
 
+  public async updateIfCurrentStatus(input: {
+    jobId: string;
+    currentStatuses: JobStatus[];
+    job: ProcessingJobRecord;
+  }): Promise<boolean> {
+    const current = this.jobs.get(input.jobId);
+    if (current === undefined || !input.currentStatuses.includes(current.status)) {
+      return false;
+    }
+
+    this.jobs.set(input.jobId, input.job);
+    return true;
+  }
+
   public async list(): Promise<ProcessingJobRecord[]> {
     return [...this.jobs.values()];
   }
@@ -70,6 +90,20 @@ export class InMemoryJobAttemptRepository implements JobAttemptRepositoryPort {
 
   public async findById(attemptId: string): Promise<JobAttemptRecord | undefined> {
     return this.attempts.get(attemptId);
+  }
+
+  public async updateIfCurrentStatus(input: {
+    attemptId: string;
+    currentStatuses: AttemptStatus[];
+    attempt: JobAttemptRecord;
+  }): Promise<boolean> {
+    const current = this.attempts.get(input.attemptId);
+    if (current === undefined || !input.currentStatuses.includes(current.status)) {
+      return false;
+    }
+
+    this.attempts.set(input.attemptId, input.attempt);
+    return true;
   }
 
   public async listByJobId(jobId: string): Promise<JobAttemptRecord[]> {
@@ -213,5 +247,65 @@ export class InMemoryTelemetryEventRepository implements TelemetryEventRepositor
 
   public async listByAttemptId(attemptId: string): Promise<OperationalTelemetryRecord[]> {
     return [...this.events.values()].filter((event) => event.attemptId === attemptId);
+  }
+}
+
+@Injectable()
+export class InMemoryQueuePublicationOutboxRepository implements QueuePublicationOutboxRepositoryPort {
+  private readonly records = new Map<string, QueuePublicationOutboxRecord>();
+
+  public async save(record: QueuePublicationOutboxRecord): Promise<void> {
+    this.records.set(record.outboxId, record);
+  }
+
+  public async findById(outboxId: string): Promise<QueuePublicationOutboxRecord | undefined> {
+    return this.records.get(outboxId);
+  }
+
+  public async findLatestByJobId(jobId: string): Promise<QueuePublicationOutboxRecord | undefined> {
+    return [...this.records.values()]
+      .filter((record) => record.jobId === jobId)
+      .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())[0];
+  }
+
+  public async list(): Promise<QueuePublicationOutboxRecord[]> {
+    return [...this.records.values()];
+  }
+
+  public async claimAvailable(input: {
+    ownerService: string;
+    now: Date;
+    limit: number;
+    leaseMs: number;
+    leaseOwner: string;
+  }): Promise<QueuePublicationOutboxRecord[]> {
+    const leaseExpiresAt = new Date(input.now.getTime() + input.leaseMs);
+    const claimed: QueuePublicationOutboxRecord[] = [];
+
+    for (const record of [...this.records.values()]
+      .filter(
+        (candidate) =>
+          candidate.ownerService === input.ownerService &&
+          candidate.status === QueuePublicationOutboxStatus.PENDING &&
+          candidate.availableAt.getTime() <= input.now.getTime() &&
+          (candidate.leaseExpiresAt === undefined || candidate.leaseExpiresAt.getTime() <= input.now.getTime())
+      )
+      .sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime())) {
+      if (claimed.length >= input.limit) {
+        break;
+      }
+
+      const nextRecord = {
+        ...record,
+        leaseOwner: input.leaseOwner,
+        leaseExpiresAt,
+        publishAttempts: record.publishAttempts + 1,
+        updatedAt: input.now
+      };
+      this.records.set(record.outboxId, nextRecord);
+      claimed.push(nextRecord);
+    }
+
+    return claimed;
   }
 }
