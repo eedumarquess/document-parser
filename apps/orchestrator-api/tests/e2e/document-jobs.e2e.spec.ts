@@ -302,6 +302,31 @@ describe('Document jobs e2e', () => {
     });
   });
 
+  it('rejects invalid x-role on submit without creating a job', async () => {
+    const initialJobCount = (await jobs.list()).length;
+
+    const response = await request(app.getHttpServer())
+      .post('/v1/parsing/jobs')
+      .set('x-role', 'INVALID_ROLE')
+      .attach('file', createPdfBuffer(1, 'invalid role submit'), {
+        filename: 'invalid-role.pdf',
+        contentType: 'application/pdf'
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.headers['x-trace-id']).toBeDefined();
+    expect(response.body).toEqual({
+      errorCode: 'VALIDATION_ERROR',
+      message: 'Invalid x-role header',
+      metadata: {
+        header: 'x-role',
+        acceptedValues: [Role.OWNER, Role.OPERATOR],
+        receivedValue: 'INVALID_ROLE'
+      }
+    });
+    await expect(jobs.list()).resolves.toHaveLength(initialJobCount);
+  });
+
   it('defaults missing actor headers to local-owner and OWNER', async () => {
     const createResponse = await request(app.getHttpServer())
       .post('/v1/parsing/jobs')
@@ -466,6 +491,47 @@ describe('Document jobs e2e', () => {
     });
   });
 
+  it('rejects invalid x-role when replaying a dead letter without mutating state', async () => {
+    await deadLetters.save({
+      dlqEventId: 'dlq-replay-invalid-role',
+      jobId: 'job-invalid-role',
+      attemptId: 'attempt-invalid-role',
+      traceId: 'trace-dlq-invalid-role',
+      queueName: 'document-processing.requested',
+      reasonCode: 'DLQ_ERROR',
+      reasonMessage: 'retries exhausted',
+      retryCount: 3,
+      payloadSnapshot: {
+        jobId: 'job-invalid-role',
+        attemptId: 'attempt-invalid-role'
+      },
+      firstSeenAt: new Date('2026-03-25T12:00:00.000Z'),
+      lastSeenAt: new Date('2026-03-25T12:00:00.000Z'),
+      retentionUntil: new Date('2026-09-21T12:00:00.000Z')
+    });
+    const initialJobCount = (await jobs.list()).length;
+
+    const response = await request(app.getHttpServer())
+      .post('/v1/parsing/dead-letters/dlq-replay-invalid-role/replay')
+      .set('x-role', 'owner')
+      .send({ reason: 'manual replay' });
+
+    expect(response.status).toBe(400);
+    expect(response.headers['x-trace-id']).toBeDefined();
+    expect(response.body).toEqual({
+      errorCode: 'VALIDATION_ERROR',
+      message: 'Invalid x-role header',
+      metadata: {
+        header: 'x-role',
+        acceptedValues: [Role.OWNER, Role.OPERATOR],
+        receivedValue: 'owner'
+      }
+    });
+    await expect(jobs.list()).resolves.toHaveLength(initialJobCount);
+    const deadLetter = await deadLetters.findById('dlq-replay-invalid-role');
+    expect(deadLetter?.replayedAt).toBeUndefined();
+  });
+
   it('exposes the operational context JSON and redacted HTML panel for a completed job', async () => {
     const createResponse = await request(app.getHttpServer())
       .post('/v1/parsing/jobs')
@@ -529,5 +595,23 @@ describe('Document jobs e2e', () => {
     expect(panelResponse.text).not.toContain('123.456.789-00');
     expect(panelResponse.text).not.toContain('paciente@example.com');
     expect(panelResponse.text).not.toContain('sk_live_super_secret_token_1234567890');
+  });
+
+  it('rejects invalid x-role on operational context reads', async () => {
+    const response = await request(app.getHttpServer())
+      .get('/v1/ops/jobs/job-invalid-role/context')
+      .set('x-role', 'operator');
+
+    expect(response.status).toBe(400);
+    expect(response.headers['x-trace-id']).toBeDefined();
+    expect(response.body).toEqual({
+      errorCode: 'VALIDATION_ERROR',
+      message: 'Invalid x-role header',
+      metadata: {
+        header: 'x-role',
+        acceptedValues: [Role.OWNER, Role.OPERATOR],
+        receivedValue: 'operator'
+      }
+    });
   });
 });
