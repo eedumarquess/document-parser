@@ -5,6 +5,7 @@ import {
   createSubmissionJob,
   failAttempt,
   markAttemptAsQueued,
+  markJobAsPublishPending,
   markJobAsQueued,
   markJobAsStored,
   markJobAsValidated,
@@ -26,8 +27,8 @@ describe('Job attempt lifecycle', () => {
   const actor = buildActor();
   const now = new Date('2026-03-25T12:00:00.000Z');
 
-  const createQueuedJob = () =>
-    markJobAsQueued({
+  const createPublishPendingJob = () =>
+    markJobAsPublishPending({
       job: markJobAsStored({
         job: markJobAsValidated({
           job: createSubmissionJob({
@@ -48,8 +49,14 @@ describe('Job attempt lifecycle', () => {
       now
     });
 
+  const createQueuedJob = () =>
+    markJobAsQueued({
+      job: createPublishPendingJob(),
+      now
+    });
+
   it('walks attempt state from PENDING to PARTIAL and stamps versions', () => {
-    const job = createQueuedJob();
+    const job = createPublishPendingJob();
     const pending = createPendingAttempt({
       attemptId: 'attempt-1',
       jobId: job.jobId,
@@ -60,7 +67,7 @@ describe('Job attempt lifecycle', () => {
 
     const started = startPendingAttempt({
       job,
-      attempt: markAttemptAsQueued({ attempt: pending }),
+      attempt: pending,
       now
     });
     const completed = completeAttemptWithOutcome({

@@ -13,7 +13,7 @@ import {
   RetentionPolicyService,
   Role
 } from '@document-parser/shared-kernel';
-import { FixedClock, IncrementalIdGenerator, InMemoryPublishedMessageBus, buildActor } from '@document-parser/testkit';
+import { FixedClock, IncrementalIdGenerator, buildActor } from '@document-parser/testkit';
 import { createDefaultExtractionPipeline } from '../../src/adapters/out/extraction/default-extraction.factory';
 import {
   InMemoryAuditRepository,
@@ -23,6 +23,7 @@ import {
   InMemoryPageArtifactRepository,
   InMemoryProcessingJobRepository,
   InMemoryProcessingResultRepository,
+  InMemoryQueuePublicationOutboxRepository,
   InMemoryUnitOfWork
 } from '../../src/adapters/out/repositories/in-memory.repositories';
 import type {
@@ -91,7 +92,7 @@ const createWorkerContext = async (buffer: Buffer, optionsOrAttemptNumber: Worke
   const artifacts = new InMemoryPageArtifactRepository();
   const deadLetters = new InMemoryDeadLetterRepository();
   const audit = new InMemoryAuditRepository();
-  const publisher = new InMemoryPublishedMessageBus();
+  const outbox = new InMemoryQueuePublicationOutboxRepository();
   const logging = new InMemoryLoggingAdapter();
   const metrics = new InMemoryMetricsAdapter();
   const tracing = new InMemoryTracingAdapter();
@@ -169,7 +170,7 @@ const createWorkerContext = async (buffer: Buffer, optionsOrAttemptNumber: Worke
     artifacts,
     deadLetters,
     audit,
-    publisher,
+    outbox,
     logging,
     metrics,
     tracing,
@@ -198,7 +199,7 @@ const createWorkerContext = async (buffer: Buffer, optionsOrAttemptNumber: Worke
         jobs,
         attempts,
         deadLetters,
-        publisher,
+        outbox,
         unitOfWork,
         new RetryPolicyService(),
         retentionPolicy,
@@ -317,16 +318,33 @@ describe('ProcessJobMessageUseCase', () => {
     await executeMessage(context);
 
     expect(await context.jobs.findById(context.jobId)).toMatchObject({
-      status: JobStatus.QUEUED
+      status: JobStatus.PUBLISH_PENDING
     });
-    expect(context.publisher.messages).toHaveLength(1);
-    expect(context.publisher.messages[0]).toMatchObject({
-      traceId: 'trace-worker-1'
-    });
+    await expect(context.outbox.list()).resolves.toEqual([
+      expect.objectContaining({
+        jobId: context.jobId,
+        documentId: context.documentId,
+        flowType: 'retry',
+        dispatchKind: 'publish_retry',
+        retryAttempt: 1,
+        status: 'PENDING',
+        messageBase: expect.objectContaining({
+          traceId: 'trace-worker-1'
+        })
+      })
+    ]);
     expect(await context.attempts.findById(context.attemptId)).toMatchObject({
       status: AttemptStatus.FAILED,
       errorCode: ErrorCode.TRANSIENT_FAILURE
     });
+    await expect(context.attempts.listByJobId(context.jobId)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          attemptNumber: 2,
+          status: AttemptStatus.PENDING
+        })
+      ])
+    );
   });
 
   it('sends terminal failures to DLQ when retries are exhausted', async () => {
@@ -342,7 +360,35 @@ describe('ProcessJobMessageUseCase', () => {
         traceId: 'trace-worker-1'
       })
     ]);
-    expect(context.publisher.messages).toHaveLength(0);
+    await expect(context.outbox.list()).resolves.toEqual([]);
+  });
+
+  it('ignores duplicate messages when the job and attempt already advanced', async () => {
+    const context = await createWorkerContext(Buffer.from('conteudo duplicado'));
+
+    await context.jobs.save({
+      ...(await context.jobs.findById(context.jobId))!,
+      status: JobStatus.PROCESSING
+    });
+    await context.attempts.save({
+      ...(await context.attempts.findById(context.attemptId))!,
+      status: AttemptStatus.PROCESSING
+    });
+
+    await expect(executeMessage(context)).resolves.toBeUndefined();
+
+    await expect(context.results.findByJobId(context.jobId)).resolves.toBeUndefined();
+    await expect(context.deadLetters.list()).resolves.toEqual([]);
+    await expect(context.outbox.list()).resolves.toEqual([]);
+    expect(context.metrics.records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'counter',
+          name: 'worker.queue_publication_outbox.duplicate_skipped',
+          traceId: 'trace-worker-1'
+        })
+      ])
+    );
   });
 
   it('moves the attempt to application DLQ when the document context is missing', async () => {
@@ -656,6 +702,7 @@ describe('ProcessingContextLoader', () => {
           ...baseJob,
           jobId: 'job-record'
         }),
+        updateIfCurrentStatus: async () => true,
         save: async () => undefined
       } as ProcessingJobRepositoryPort,
       {
@@ -669,6 +716,7 @@ describe('ProcessingContextLoader', () => {
           jobId: 'job-record'
         }),
         save: async () => undefined,
+        updateIfCurrentStatus: async () => true,
         listByJobId: async () => []
       } as JobAttemptRepositoryPort
     );
@@ -707,6 +755,7 @@ describe('ProcessingContextLoader', () => {
           ...baseJob,
           documentId: 'doc-record'
         }),
+        updateIfCurrentStatus: async () => true,
         save: async () => undefined
       } as ProcessingJobRepositoryPort,
       {
@@ -720,6 +769,7 @@ describe('ProcessingContextLoader', () => {
           ...baseAttempt
         }),
         save: async () => undefined,
+        updateIfCurrentStatus: async () => true,
         listByJobId: async () => []
       } as JobAttemptRepositoryPort
     );
@@ -757,6 +807,7 @@ describe('ProcessingContextLoader', () => {
         findById: async () => ({
           ...baseJob
         }),
+        updateIfCurrentStatus: async () => true,
         save: async () => undefined
       } as ProcessingJobRepositoryPort,
       {
@@ -770,6 +821,7 @@ describe('ProcessingContextLoader', () => {
           attemptId: 'attempt-record'
         }),
         save: async () => undefined,
+        updateIfCurrentStatus: async () => true,
         listByJobId: async () => []
       } as JobAttemptRepositoryPort
     );

@@ -6,12 +6,13 @@ import {
   Role,
   TransientFailureError
 } from '@document-parser/shared-kernel';
-import { IncrementalIdGenerator, InMemoryPublishedMessageBus } from '@document-parser/testkit';
+import { IncrementalIdGenerator } from '@document-parser/testkit';
 import {
   InMemoryAuditRepository,
   InMemoryDeadLetterRepository,
   InMemoryJobAttemptRepository,
   InMemoryProcessingJobRepository,
+  InMemoryQueuePublicationOutboxRepository,
   InMemoryUnitOfWork
 } from '../../src/adapters/out/repositories/in-memory.repositories';
 import { AuditEventRecorder } from '../../src/application/services/audit-event-recorder.service';
@@ -24,9 +25,9 @@ const createContext = async (attemptNumber = 1) => {
   const attempts = new InMemoryJobAttemptRepository();
   const deadLetters = new InMemoryDeadLetterRepository();
   const audit = new InMemoryAuditRepository();
+  const outbox = new InMemoryQueuePublicationOutboxRepository();
   const retentionPolicy = new RetentionPolicyService();
   const redactionPolicy = new RedactionPolicyService();
-  const publisher = new InMemoryPublishedMessageBus();
   const now = new Date('2026-03-25T12:00:00.000Z');
   idGenerator.next('doc');
   idGenerator.next('job');
@@ -68,7 +69,7 @@ const createContext = async (attemptNumber = 1) => {
     attempts,
     deadLetters,
     audit,
-    publisher,
+    outbox,
     retentionPolicy,
     redactionPolicy,
     unitOfWork: new InMemoryUnitOfWork(),
@@ -84,7 +85,7 @@ describe('ProcessingFailureRecoveryService', () => {
       context.jobs,
       context.attempts,
       context.deadLetters,
-      context.publisher,
+      context.outbox,
       context.unitOfWork,
       new RetryPolicyService(),
       context.retentionPolicy,
@@ -131,7 +132,7 @@ describe('ProcessingFailureRecoveryService', () => {
     ).resolves.toBe('retry_scheduled');
 
     await expect(context.jobs.findById('job-1')).resolves.toMatchObject({
-      status: JobStatus.QUEUED
+      status: JobStatus.PUBLISH_PENDING
     });
     await expect(context.attempts.listByJobId('job-1')).resolves.toEqual(
       expect.arrayContaining([
@@ -141,36 +142,36 @@ describe('ProcessingFailureRecoveryService', () => {
         }),
         expect.objectContaining({
           attemptNumber: 2,
-          status: AttemptStatus.QUEUED
+          status: AttemptStatus.PENDING
         })
       ])
     );
-    expect(context.publisher.messages).toHaveLength(1);
-    await expect(context.audit.list()).resolves.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          eventType: 'PROCESSING_RETRY_SCHEDULED'
+    await expect(context.outbox.list()).resolves.toEqual([
+      expect.objectContaining({
+        jobId: 'job-1',
+        documentId: 'doc-1',
+        flowType: 'retry',
+        dispatchKind: 'publish_retry',
+        ownerService: 'document-processing-worker',
+        retryAttempt: 1,
+        status: 'PENDING',
+        messageBase: expect.objectContaining({
+          traceId: 'trace-retry',
+          attemptId: expect.any(String)
         })
-      ])
-    );
+      })
+    ]);
+    await expect(context.audit.list()).resolves.toEqual([]);
   });
 
-  it('moves the flow directly to DLQ when retry publication fails', async () => {
-    const context = await createContext();
-    const publisher = {
-      async publishRequested(): Promise<void> {
-        return;
-      },
-      async publishRetry(): Promise<void> {
-        throw new Error('retry bus down');
-      }
-    };
+  it('moves the flow directly to DLQ when retries are exhausted', async () => {
+    const context = await createContext(3);
     const service = new ProcessingFailureRecoveryService(
       context.idGenerator,
       context.jobs,
       context.attempts,
       context.deadLetters,
-      publisher,
+      context.outbox,
       context.unitOfWork,
       new RetryPolicyService(),
       context.retentionPolicy,
@@ -214,7 +215,7 @@ describe('ProcessingFailureRecoveryService', () => {
         },
         now: context.now
       })
-    ).rejects.toThrow('retry bus down');
+    ).rejects.toThrow('temporary outage');
 
     await expect(context.jobs.findById('job-1')).resolves.toMatchObject({
       status: JobStatus.FAILED,
@@ -224,11 +225,8 @@ describe('ProcessingFailureRecoveryService', () => {
       expect.arrayContaining([
         expect.objectContaining({
           attemptId: 'attempt-1',
-          status: AttemptStatus.FAILED
-        }),
-        expect.objectContaining({
-          attemptNumber: 2,
           status: AttemptStatus.MOVED_TO_DLQ,
+          attemptNumber: 3,
           errorCode: 'DLQ_ERROR'
         })
       ])
@@ -239,5 +237,6 @@ describe('ProcessingFailureRecoveryService', () => {
         reasonCode: 'DLQ_ERROR'
       })
     ]);
+    await expect(context.outbox.list()).resolves.toEqual([]);
   });
 });
