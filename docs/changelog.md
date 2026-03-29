@@ -4,6 +4,37 @@ Todas as mudancas relevantes deste repositorio devem ser registradas aqui.
 
 O formato segue uma adaptacao simples de `Keep a Changelog` e usa as tags de contexto dos commits como apoio para rastreabilidade.
 
+## [2026-03-28] - Hardening de integridade do contexto do worker
+
+### Added
+
+- Gate explicito de integridade no carregamento de contexto do worker para validar coerencia entre `message`, `job`, `document` e `attempt` antes de qualquer leitura de binario ou mutacao de estado.
+- Novo erro fatal `InconsistentProcessingContextError` para distinguir mismatch relacional de ausencia de recurso no fluxo de DLQ de aplicacao.
+- Cobertura adicional de aplicacao para mismatch entre `attempt.jobId` e `job.jobId`, divergencia entre `job.documentId` e `document.documentId` e retornos corrompidos de repositorio no `ProcessingContextLoader`.
+
+### Changed
+
+- `ProcessingFailureRecoveryService` passou a tratar falhas de integridade de contexto com quarentena conservadora, persistindo DLQ e auditoria a partir da mensagem quando o contexto carregado nao for confiavel para mutacao.
+- Logs e metadados de falha do worker passaram a registrar `contextIssue`, `missingResources` e `mismatches` para facilitar auditoria operacional e investigacao de corrupcao cruzada.
+- `RedactionPolicyService` passou a preservar `contextIssue` e detalhes de `mismatches` como metadados operacionais em auditoria, logs e snapshots de DLQ.
+
+### Fixed
+
+- O worker deixou de aceitar `attemptId`, `jobId` e `documentId` inconsistentes entre mensagem e repositorios no caminho feliz.
+- Falhas de contexto divergente nao mutam mais `job` e `attempt` potencialmente estrangeiros durante o recovery fatal.
+- O fluxo de observabilidade deixou de mascarar indevidamente a evidencia estrutural de mismatch relacional em DLQ e auditoria.
+
+### Technical Notes
+
+- `AttemptExecutionCoordinator` permaneceu sem guards extras; a protecao ficou centralizada no `ProcessingContextLoader`.
+- A validacao executada nesta entrega foi `corepack pnpm test:application -- --runInBand --runTestsByPath apps/document-processing-worker/tests/application/process-job-message.use-case.spec.ts` seguida de `corepack pnpm typecheck`.
+
+### Commit Contexts
+
+- `bug(worker-context-integrity)`
+- `feat(worker-context-observability)`
+- `docs(changelog)`
+
 ## [2026-03-27] - Refinos do painel operacional e bootstrap local
 
 ### Added
