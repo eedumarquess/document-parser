@@ -6,6 +6,57 @@ O formato segue uma adaptacao simples de `Keep a Changelog` e usa as tags de con
 
 ## [2026-03-28] - Hardening do parsing de x-role na orchestrator-api
 
+## [2026-03-28] - Outbox transacional para publicacao de jobs
+
+### Added
+
+- Modelo compartilhado de `queue_publication_outbox` no `shared-kernel`, com lease, retry exponencial, retencao e metadados de finalizacao por fluxo.
+- Dispatcher dedicado na `orchestrator-api` e no `document-processing-worker` para publicar `ProcessingJobRequestedMessage` a partir do outbox e finalizar `job`, `attempt` e auditoria apos confirmacao.
+- Contexto operacional do job com bloco `queuePublication`, incluindo status do outbox, owner service, flow, dispatch kind, tentativas de publish e ultimo erro.
+- Cobertura de dominio, aplicacao, contrato e E2E para `PUBLISH_PENDING`, envio assíncrono, replay assíncrono e retry do worker via outbox.
+
+### Changed
+
+- O lifecycle de `ProcessingJob` passou a seguir `STORED -> PUBLISH_PENDING -> QUEUED`, mantendo `AttemptStatus.PENDING` como estado persistido pre-publicacao.
+- `SubmitDocumentUseCase`, `ReprocessDocumentUseCase` e `ReplayDeadLetterUseCase` passaram a aceitar o request de forma assíncrona, persistindo `job`, `attempt` e outbox na mesma transacao.
+- O `ProcessingFailureRecoveryService` deixou de publicar retry diretamente no broker e passou a gravar a nova tentativa no outbox transacional do worker.
+- `AttemptExecutionCoordinator` passou a tratar mensagens duplicadas ou tardias com compare-and-set por status, ignorando consumo que chegue apos o avancar do `job` ou `attempt`.
+- `POST /v1/parsing/jobs`, `POST /v1/parsing/jobs/:jobId/reprocess` e `POST /v1/parsing/dead-letters/:dlqEventId/replay` passaram a retornar `202` quando o job fica em `PUBLISH_PENDING`.
+
+### Fixed
+
+- O sistema deixou de depender de publish síncrono seguido de persistencia, eliminando a janela em que a fila podia receber uma mensagem valida sem o estado correspondente no banco.
+- Retries do worker deixaram de cair em DLQ espurio por falha intermediaria entre broker e persistencia do novo estado.
+- O ambiente in-memory da `orchestrator-api` passou a publicar de forma deterministica nos testes, evitando corridas artificiais entre dispatcher e simulacao do worker.
+
+### Technical Notes
+
+- A colecao `queue_publication_outbox` ganhou indices para `outboxId`, `(ownerService,status,availableAt)`, `jobId`, `attemptId`, `leaseExpiresAt` e TTL de `retentionUntil`.
+- O dispatcher usa `publishedAt` no instante real do publish; os use cases deixaram de preencher esse campo antes da confirmacao.
+- O `GET /v1/parsing/jobs/:jobId` agora pode expor `PUBLISH_PENDING`, e o `GET /v1/ops/jobs/:jobId/context` passou a mostrar o estado do outbox mais recente por job.
+- A validacao executada nesta entrega cobriu `npm run typecheck`, suites de dominio de lifecycle, suites de aplicacao do orchestrator e worker, contratos do publisher in-memory e o E2E de `document-jobs`.
+
+### Commit Contexts
+
+- `feat(shared-outbox-kernel)`
+- `bug(shared-outbox-redaction)`
+- `feat(domain-publish-pending)`
+- `feat(orchestrator-outbox-contracts)`
+- `feat(orchestrator-outbox-storage)`
+- `feat(orchestrator-outbox-dispatcher)`
+- `feat(orchestrator-async-publication)`
+- `feat(orchestrator-replay-publication)`
+- `feat(orchestrator-ops-outbox-visibility)`
+- `bug(orchestrator-inmemory-dispatch)`
+- `feat(worker-outbox-contracts)`
+- `feat(worker-outbox-storage)`
+- `feat(worker-outbox-dispatcher)`
+- `feat(worker-retry-outbox)`
+- `feat(outbox-regression-coverage)`
+- `feat(worker-outbox-regression-coverage)`
+- `bug(domain-publish-pending-coverage)`
+- `docs(changelog)`
+
 ### Added
 
 - Helper HTTP compartilhado para resolver `traceId` e `AuditActor` de forma consistente nos controllers da `orchestrator-api`.
