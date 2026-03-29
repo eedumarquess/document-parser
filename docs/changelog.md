@@ -4,6 +4,37 @@ Todas as mudancas relevantes deste repositorio devem ser registradas aqui.
 
 O formato segue uma adaptacao simples de `Keep a Changelog` e usa as tags de contexto dos commits como apoio para rastreabilidade.
 
+## [2026-03-28] - Hardening do parsing de x-role na orchestrator-api
+
+### Added
+
+- Helper HTTP compartilhado para resolver `traceId` e `AuditActor` de forma consistente nos controllers da `orchestrator-api`.
+- Cobertura E2E para `x-role` invalido nos endpoints de submit, replay de DLQ e leitura de contexto operacional.
+
+### Changed
+
+- `x-role` ausente continua assumindo `OWNER`, mas qualquer valor presente fora de `OWNER` e `OPERATOR` agora retorna `400 VALIDATION_ERROR`.
+- Os controllers `DocumentJobsController`, `DeadLettersController` e `OperationalJobsController` passaram a usar a mesma regra centralizada de parsing de headers.
+- `docs/ddd/04-result-delivery.md` foi realinhado ao contrato atual de `x-role`.
+
+### Fixed
+
+- Headers `x-role` com typo, casing diferente ou valor arbitrario deixaram de receber privilegio efetivo de `OWNER`.
+- Respostas de erro por header invalido passaram a preservar `x-trace-id` para correlacao operacional.
+
+### Technical Notes
+
+- O RBAC do `SimpleRbacAuthorizationAdapter` nao mudou; o endurecimento ficou restrito a borda HTTP.
+- O payload do erro de header invalido segue o envelope padrao com `errorCode`, `message` e `metadata`.
+- A validacao desta entrega cobriu `corepack pnpm typecheck` e o filtro E2E `rejects invalid x-role`; a suite E2E completa segue bloqueada por falhas preexistentes fora deste escopo.
+
+### Commit Contexts
+
+- `bug(orchestrator-role-header)`
+- `feat(orchestrator-http-context)`
+- `test(orchestrator-e2e-role-header)`
+- `docs(result-delivery)`
+
 ## [2026-03-28] - Hardening de integridade do contexto do worker
 
 ### Added

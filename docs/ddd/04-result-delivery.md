@@ -90,7 +90,8 @@ O controle de acesso nao esta modelado como um `ResultAccessPolicy` dedicado. No
 No controller:
 
 - `x-actor-id` default para `local-owner`
-- `x-role` default para `OWNER` quando ausente ou invalido
+- `x-role` default para `OWNER` apenas quando ausente
+- `x-role` invalido retorna `400 VALIDATION_ERROR`
 
 ## Contratos HTTP atuais
 
