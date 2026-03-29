@@ -116,6 +116,7 @@ Eventos gravados:
 - Toda submissao aceita gera `DOCUMENT_ACCEPTED`.
 - Quando um binario novo e persistido, o sistema gera `DOCUMENT_STORED`.
 - Quando o job entra na fila principal, o sistema gera `PROCESSING_JOB_QUEUED`.
+- Quando a publicacao do outbox do `orchestrator-api` falha, o job vai para `FAILED`, o outbox vai para `FAILED` e o sistema gera `PROCESSING_JOB_QUEUEING_FAILED`.
 - Quando ha reaproveitamento por compatibilidade, o sistema gera `COMPATIBLE_RESULT_REUSED`.
 - Consulta de status gera `JOB_STATUS_QUERIED`.
 - Consulta de resultado final gera `RESULT_QUERIED`.
@@ -126,6 +127,13 @@ Eventos gravados:
 - Falha terminal com persistencia em `dead_letter_events` gera `PROCESSING_FAILED`.
 
 ## Retry e DLQ no estado atual
+
+### Falha de publicacao no outbox do orchestrator
+
+- o `orchestrator-api` nao reapresenta publicacoes de outbox que falham no broker
+- a primeira falha de publicacao fecha o `ProcessingJob` em `FAILED`
+- o `JobAttempt` inicial tambem vai para `FAILED`, mesmo sem ter chegado ao worker
+- o `QueuePublicationOutboxRecord` vai para `FAILED`, preservando `lastError` para diagnostico operacional
 
 ### Politica de retry
 

@@ -4,6 +4,38 @@ Todas as mudancas relevantes deste repositorio devem ser registradas aqui.
 
 O formato segue uma adaptacao simples de `Keep a Changelog` e usa as tags de contexto dos commits como apoio para rastreabilidade.
 
+## [2026-03-28] - Falha terminal de publicacao no outbox do orchestrator
+
+### Added
+
+- Novo estado terminal `FAILED` para `QueuePublicationOutboxStatus`, permitindo fechar o registro do outbox sem mantê-lo elegivel para novo claim.
+- Cobertura dedicada para falha terminal de publicacao no dominio, no dispatcher do orchestrator, nas leituras publicas/operacionais e no E2E de `document-jobs`.
+
+### Changed
+
+- `QueuePublicationOutboxDispatcherService` da `orchestrator-api` deixou de reagendar publish com falha e passou a finalizar o erro na primeira tentativa.
+- `QueuePublicationFailureHandler` passou a ser o caminho oficial da falha de publicacao do outbox, persistindo `job`, `attempt` e `outbox` de forma terminal.
+- `recordJobError` agora adiciona a transicao `FAILED` em `ingestionTransitions` quando a falha e terminal.
+
+### Fixed
+
+- Jobs aceitos pela API nao ficam mais presos em `PUBLISH_PENDING` quando a confirmacao de publish no broker falha.
+- `GET /v1/parsing/jobs/:jobId` agora converge para `FAILED` nesse cenario, sem depender de `errorCode` ou `errorMessage` no contrato publico.
+- O contexto operacional passou a refletir falha terminal de enfileiramento com `queuePublication.status=FAILED` e `lastError` preenchido.
+
+### Technical Notes
+
+- O `JobAttempt` inicial tambem passa a `FAILED` quando a publicacao falha antes de chegar ao worker.
+- O outbox do `document-processing-worker` nao mudou; a terminalizacao imediata ficou restrita ao `orchestrator-api`.
+- A validacao executada nesta entrega cobriu `corepack pnpm typecheck` e as suites focadas de dominio, aplicacao e E2E da `orchestrator-api` para queue publication failure.
+
+### Commit Contexts
+
+- `bug(domain): registrar falha terminal de publicacao em fila`
+- `bug(orchestrator): terminalizar falhas do outbox na publicacao`
+- `test(orchestrator): cobrir falhas terminais de queue publication`
+- `docs(changelog): documentar falha terminal de queue publication`
+
 ## [2026-03-28] - Hardening do parsing de x-role na orchestrator-api
 
 ## [2026-03-28] - Outbox transacional para publicacao de jobs
