@@ -1,7 +1,10 @@
 import type {
+  AttemptStatus,
   AuditActor,
+  JobStatus,
   LogRecord,
   ProcessingJobRequestedMessage,
+  QueuePublicationOutboxRecord,
   TelemetryEventSinkPort
 } from '@document-parser/shared-kernel';
 import type {
@@ -53,12 +56,22 @@ export interface DocumentRepositoryPort {
 export interface ProcessingJobRepositoryPort {
   findById(jobId: string): Promise<ProcessingJobRecord | undefined>;
   save(job: ProcessingJobRecord): Promise<void>;
+  updateIfCurrentStatus(input: {
+    jobId: string;
+    currentStatuses: JobStatus[];
+    job: ProcessingJobRecord;
+  }): Promise<boolean>;
   list(): Promise<ProcessingJobRecord[]>;
 }
 
 export interface JobAttemptRepositoryPort {
   save(attempt: JobAttemptRecord): Promise<void>;
   findById(attemptId: string): Promise<JobAttemptRecord | undefined>;
+  updateIfCurrentStatus(input: {
+    attemptId: string;
+    currentStatuses: AttemptStatus[];
+    attempt: JobAttemptRecord;
+  }): Promise<boolean>;
   listByJobId(jobId: string): Promise<JobAttemptRecord[]>;
 }
 
@@ -96,6 +109,20 @@ export interface UnitOfWorkPort {
 export interface JobPublisherPort {
   publishRequested(message: ProcessingJobRequestedMessage): Promise<void>;
   publishRetry(message: ProcessingJobRequestedMessage, retryAttempt: number): Promise<void>;
+}
+
+export interface QueuePublicationOutboxRepositoryPort {
+  save(record: QueuePublicationOutboxRecord): Promise<void>;
+  findById(outboxId: string): Promise<QueuePublicationOutboxRecord | undefined>;
+  findLatestByJobId(jobId: string): Promise<QueuePublicationOutboxRecord | undefined>;
+  list(): Promise<QueuePublicationOutboxRecord[]>;
+  claimAvailable(input: {
+    ownerService: string;
+    now: Date;
+    limit: number;
+    leaseMs: number;
+    leaseOwner: string;
+  }): Promise<QueuePublicationOutboxRecord[]>;
 }
 
 export interface AuditPort {

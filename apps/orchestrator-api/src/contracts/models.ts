@@ -2,6 +2,7 @@ import type {
   ArtifactReference,
   AuditActor,
   JobWarning,
+  QueuePublicationOutboxRecord,
   TelemetryEventRecord
 } from '@document-parser/shared-kernel';
 
@@ -62,3 +63,5 @@ export type PageArtifactRecord = ArtifactReference & {
 };
 
 export type OperationalTelemetryRecord = TelemetryEventRecord;
+
+export type { QueuePublicationOutboxRecord };
