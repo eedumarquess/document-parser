@@ -1,5 +1,11 @@
 import type { Collection } from 'mongodb';
-import type { TelemetryEventRecord } from '@document-parser/shared-kernel';
+import type {
+  AttemptStatus,
+  JobStatus,
+  QueuePublicationOutboxRecord,
+  TelemetryEventRecord
+} from '@document-parser/shared-kernel';
+import { QueuePublicationOutboxStatus } from '@document-parser/shared-kernel';
 import type {
   AuditEventRecord,
   DeadLetterRecord,
@@ -17,6 +23,7 @@ import type {
   PageArtifactRepositoryPort,
   ProcessingJobRepositoryPort,
   ProcessingResultRepositoryPort,
+  QueuePublicationOutboxRepositoryPort,
   TelemetryEventRepositoryPort
 } from '../../../contracts/ports';
 import type { MongoDatabaseProvider, MongoSessionContext } from './mongodb.provider';
@@ -36,6 +43,8 @@ type MongoDocumentShape = {
   createdAt: Date;
   updatedAt: Date;
 };
+
+type MongoQueuePublicationOutboxShape = QueuePublicationOutboxRecord;
 
 abstract class MongoRepositoryBase {
   public constructor(
@@ -105,6 +114,24 @@ export class MongoProcessingJobRepositoryAdapter
     );
   }
 
+  public async updateIfCurrentStatus(input: {
+    jobId: string;
+    currentStatuses: JobStatus[];
+    job: ProcessingJobRecord;
+  }): Promise<boolean> {
+    const collection = await this.getCollection();
+    const result = await collection.replaceOne(
+      {
+        jobId: input.jobId,
+        status: { $in: input.currentStatuses }
+      },
+      input.job,
+      { session: this.getSession() }
+    );
+
+    return result.matchedCount === 1;
+  }
+
   private async getCollection(): Promise<Collection<ProcessingJobRecord>> {
     const database = await this.provider.getDatabase();
     const collection = database.collection<ProcessingJobRecord>('processing_jobs');
@@ -140,6 +167,24 @@ export class MongoJobAttemptRepositoryAdapter
       attempt,
       { upsert: true, session: this.getSession() }
     );
+  }
+
+  public async updateIfCurrentStatus(input: {
+    attemptId: string;
+    currentStatuses: AttemptStatus[];
+    attempt: JobAttemptRecord;
+  }): Promise<boolean> {
+    const collection = await this.getCollection();
+    const result = await collection.replaceOne(
+      {
+        attemptId: input.attemptId,
+        status: { $in: input.currentStatuses }
+      },
+      input.attempt,
+      { session: this.getSession() }
+    );
+
+    return result.matchedCount === 1;
   }
 
   public async listByJobId(jobId: string): Promise<JobAttemptRecord[]> {
@@ -386,6 +431,113 @@ export class MongoTelemetryEventRepositoryAdapter
         { key: { traceId: 1, occurredAt: 1 } },
         { key: { attemptId: 1, occurredAt: 1 } },
         { key: { serviceName: 1, occurredAt: 1 } },
+        { key: { retentionUntil: 1 }, expireAfterSeconds: 0 }
+      ]);
+      this.indexesEnsured = true;
+    }
+
+    return collection;
+  }
+}
+
+export class MongoQueuePublicationOutboxRepositoryAdapter
+  extends MongoRepositoryBase
+  implements QueuePublicationOutboxRepositoryPort
+{
+  private indexesEnsured = false;
+
+  public async save(record: QueuePublicationOutboxRecord): Promise<void> {
+    const collection = await this.getCollection();
+    await collection.replaceOne(
+      { outboxId: record.outboxId },
+      record,
+      { upsert: true, session: this.getSession() }
+    );
+  }
+
+  public async findById(outboxId: string): Promise<QueuePublicationOutboxRecord | undefined> {
+    const collection = await this.getCollection();
+    const record = await collection.findOne({ outboxId }, { session: this.getSession() });
+    return record === null ? undefined : record;
+  }
+
+  public async findLatestByJobId(jobId: string): Promise<QueuePublicationOutboxRecord | undefined> {
+    const collection = await this.getCollection();
+    const record = await collection.findOne(
+      { jobId },
+      {
+        session: this.getSession(),
+        sort: { createdAt: -1 }
+      }
+    );
+
+    return record === null ? undefined : record;
+  }
+
+  public async list(): Promise<QueuePublicationOutboxRecord[]> {
+    const collection = await this.getCollection();
+    return collection
+      .find({}, { session: this.getSession() })
+      .sort({ createdAt: -1 })
+      .toArray();
+  }
+
+  public async claimAvailable(input: {
+    ownerService: string;
+    now: Date;
+    limit: number;
+    leaseMs: number;
+    leaseOwner: string;
+  }): Promise<QueuePublicationOutboxRecord[]> {
+    const collection = await this.getCollection();
+    const claimed: QueuePublicationOutboxRecord[] = [];
+    const leaseExpiresAt = new Date(input.now.getTime() + input.leaseMs);
+
+    for (let index = 0; index < input.limit; index += 1) {
+      const result = await collection.findOneAndUpdate(
+        {
+          ownerService: input.ownerService,
+          status: QueuePublicationOutboxStatus.PENDING,
+          availableAt: { $lte: input.now },
+          $or: [{ leaseExpiresAt: { $lte: input.now } }, { leaseExpiresAt: { $exists: false } }]
+        },
+        {
+          $set: {
+            leaseOwner: input.leaseOwner,
+            leaseExpiresAt,
+            updatedAt: input.now
+          },
+          $inc: {
+            publishAttempts: 1
+          }
+        },
+        {
+          session: this.getSession(),
+          sort: { createdAt: 1 },
+          returnDocument: 'after'
+        }
+      );
+
+      if (result === null) {
+        break;
+      }
+
+      claimed.push(result);
+    }
+
+    return claimed;
+  }
+
+  private async getCollection(): Promise<Collection<MongoQueuePublicationOutboxShape>> {
+    const database = await this.provider.getDatabase();
+    const collection = database.collection<MongoQueuePublicationOutboxShape>('queue_publication_outbox');
+    if (!this.indexesEnsured) {
+      await collection.createIndexes([
+        { key: { outboxId: 1 }, unique: true },
+        { key: { ownerService: 1, status: 1, availableAt: 1 } },
+        { key: { jobId: 1, createdAt: -1 } },
+        { key: { attemptId: 1, createdAt: -1 } },
+        { key: { leaseExpiresAt: 1 } },
         { key: { retentionUntil: 1 }, expireAfterSeconds: 0 }
       ]);
       this.indexesEnsured = true;
