@@ -1,0 +1,12 @@
+.git
+.gitignore
+node_modules
+.pnpm-store
+coverage
+dist
+.env
+.env.*
+!.env.example
+!.env.docker.dev.example
+docs
+parser_documental_requisitos_fechados.md
