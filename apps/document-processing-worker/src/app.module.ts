@@ -19,6 +19,7 @@ import {
   InMemoryPageArtifactRepository,
   InMemoryProcessingJobRepository,
   InMemoryProcessingResultRepository,
+  InMemoryQueuePublicationOutboxRepository,
   InMemoryTelemetryEventRepository,
   InMemoryUnitOfWork
 } from './adapters/out/repositories/in-memory.repositories';
@@ -26,6 +27,11 @@ import { AuditEventRecorder } from './application/services/audit-event-recorder.
 import { AttemptExecutionCoordinator } from './application/services/attempt-execution-coordinator.service';
 import { ProcessingContextLoader } from './application/services/processing-context-loader.service';
 import { ProcessingFailureRecoveryService } from './application/services/processing-failure-recovery.service';
+import {
+  DEFAULT_QUEUE_PUBLICATION_DISPATCHER_RUNTIME,
+  QueuePublicationOutboxDispatcherService,
+  type QueuePublicationDispatcherRuntime
+} from './application/services/queue-publication-outbox-dispatcher.service';
 import { ProcessingSuccessPersister } from './application/services/processing-success-persister.service';
 import { ProcessJobMessageUseCase } from './application/use-cases/process-job-message.use-case';
 import type {
@@ -43,6 +49,7 @@ import type {
   PageArtifactRepositoryPort,
   ProcessingJobRepositoryPort,
   ProcessingResultRepositoryPort,
+  QueuePublicationOutboxRepositoryPort,
   TelemetryEventRepositoryPort,
   TracingPort,
   UnitOfWorkPort
@@ -66,6 +73,7 @@ export type WorkerProviderOverrides = Partial<{
   results: ProcessingResultRepositoryPort;
   artifacts: PageArtifactRepositoryPort;
   deadLetters: DeadLetterRepositoryPort;
+  queuePublicationOutbox: QueuePublicationOutboxRepositoryPort;
   audit: AuditPort;
   telemetry: TelemetryEventRepositoryPort;
   logging: LoggingPort;
@@ -77,6 +85,7 @@ export type WorkerProviderOverrides = Partial<{
   ocrEngine: OcrEnginePort;
   llmExtraction: LlmExtractionPort;
   extraction: ExtractionPipelinePort;
+  queuePublicationDispatcherRuntime: QueuePublicationDispatcherRuntime;
   serviceName: string;
 }>;
 
@@ -116,8 +125,16 @@ export class DocumentProcessingWorkerModule {
         provide: TOKENS.DEAD_LETTER_REPOSITORY,
         useValue: overrides.deadLetters ?? new InMemoryDeadLetterRepository()
       },
+      {
+        provide: TOKENS.QUEUE_PUBLICATION_OUTBOX_REPOSITORY,
+        useValue: overrides.queuePublicationOutbox ?? new InMemoryQueuePublicationOutboxRepository()
+      },
       { provide: TOKENS.AUDIT, useValue: overrides.audit ?? new InMemoryAuditRepository() },
       { provide: TOKENS.TELEMETRY_REPOSITORY, useValue: telemetry },
+      {
+        provide: TOKENS.QUEUE_PUBLICATION_DISPATCHER_RUNTIME,
+        useValue: overrides.queuePublicationDispatcherRuntime ?? DEFAULT_QUEUE_PUBLICATION_DISPATCHER_RUNTIME
+      },
       { provide: TOKENS.LOGGING, useValue: observability.logging },
       { provide: TOKENS.METRICS, useValue: observability.metrics },
       { provide: TOKENS.TRACING, useValue: observability.tracing },
@@ -140,6 +157,7 @@ export class DocumentProcessingWorkerModule {
       RetentionPolicyService,
       RedactionPolicyService,
       AuditEventRecorder,
+      QueuePublicationOutboxDispatcherService,
       ProcessingContextLoader,
       AttemptExecutionCoordinator,
       ProcessingSuccessPersister,

@@ -3,6 +3,7 @@ import {
   parseOtlpHeaders
 } from '@document-parser/shared-kernel';
 import type { BinaryStoragePort, JobPublisherPort } from '../contracts/ports';
+import { InMemoryQueuePublicationOutboxRepository } from '../adapters/out/repositories/in-memory.repositories';
 import {
   MongoAuditRepositoryAdapter,
   MongoDeadLetterRepositoryAdapter,
@@ -11,12 +12,14 @@ import {
   MongoPageArtifactRepositoryAdapter,
   MongoProcessingJobRepositoryAdapter,
   MongoProcessingResultRepositoryAdapter,
+  MongoQueuePublicationOutboxRepositoryAdapter,
   MongoTelemetryEventRepositoryAdapter
 } from '../adapters/out/repositories/mongodb.repositories';
 import { MongoDatabaseProvider, MongoSessionContext, MongoUnitOfWorkAdapter } from '../adapters/out/repositories/mongodb.provider';
 import { MinioBinaryStorageAdapter } from '../adapters/out/storage/minio-binary-storage.adapter';
 import { RabbitMqJobPublisherAdapter } from '../adapters/out/queue/rabbitmq-job-publisher.adapter';
 import type { WorkerProviderOverrides } from '../app.module';
+import { DEFAULT_QUEUE_PUBLICATION_DISPATCHER_RUNTIME } from '../application/services/queue-publication-outbox-dispatcher.service';
 
 type RuntimeMode = 'memory' | 'real';
 
@@ -40,7 +43,9 @@ export function buildWorkerRuntimeBootstrapFromEnv(): WorkerRuntimeBootstrap {
         serviceName,
         ...buildObservabilityOverrides(serviceName),
         storage: createNoopStorage(),
-        publisher: createNoopPublisher()
+        publisher: createNoopPublisher(),
+        queuePublicationOutbox: new InMemoryQueuePublicationOutboxRepository(),
+        queuePublicationDispatcherRuntime: buildQueuePublicationDispatcherRuntimeFromEnv()
       }
     };
   }
@@ -70,9 +75,11 @@ export function buildWorkerRuntimeBootstrapFromEnv(): WorkerRuntimeBootstrap {
       results: new MongoProcessingResultRepositoryAdapter(mongoProvider, sessionContext),
       artifacts: new MongoPageArtifactRepositoryAdapter(mongoProvider, sessionContext),
       deadLetters: new MongoDeadLetterRepositoryAdapter(mongoProvider, sessionContext),
+      queuePublicationOutbox: new MongoQueuePublicationOutboxRepositoryAdapter(mongoProvider, sessionContext),
       audit: new MongoAuditRepositoryAdapter(mongoProvider, sessionContext),
       telemetry: new MongoTelemetryEventRepositoryAdapter(mongoProvider, sessionContext),
       publisher: new RabbitMqJobPublisherAdapter(rabbitMqUrl, queueName),
+      queuePublicationDispatcherRuntime: buildQueuePublicationDispatcherRuntimeFromEnv(),
       unitOfWork: new MongoUnitOfWorkAdapter(mongoProvider, sessionContext)
     }
   };
@@ -158,4 +165,35 @@ function buildObservabilityOverrides(serviceName: string) {
     serviceName: process.env.OTEL_SERVICE_NAME?.trim() || serviceName,
     headers: parseOtlpHeaders(process.env.OTEL_EXPORTER_OTLP_HEADERS)
   });
+}
+
+function buildQueuePublicationDispatcherRuntimeFromEnv() {
+  return {
+    pollIntervalMs: parseOptionalNumberEnv(
+      'OUTBOX_POLL_INTERVAL_MS',
+      DEFAULT_QUEUE_PUBLICATION_DISPATCHER_RUNTIME.pollIntervalMs
+    ),
+    batchSize: parseOptionalNumberEnv(
+      'OUTBOX_BATCH_SIZE',
+      DEFAULT_QUEUE_PUBLICATION_DISPATCHER_RUNTIME.batchSize
+    ),
+    leaseMs: parseOptionalNumberEnv(
+      'OUTBOX_LEASE_MS',
+      DEFAULT_QUEUE_PUBLICATION_DISPATCHER_RUNTIME.leaseMs
+    )
+  };
+}
+
+function parseOptionalNumberEnv(name: string, defaultValue: number): number {
+  const rawValue = process.env[name];
+  if (rawValue === undefined || rawValue.trim() === '') {
+    return defaultValue;
+  }
+
+  const value = Number(rawValue);
+  if (Number.isNaN(value)) {
+    throw new Error(`Environment variable ${name} must be a number`);
+  }
+
+  return value;
 }
