@@ -1,4 +1,8 @@
-import type { ArtifactReference, AuditActor } from '@document-parser/shared-kernel';
+import type {
+  ArtifactReference,
+  AuditActor,
+  QueuePublicationOutboxRecord
+} from '@document-parser/shared-kernel';
 
 export type {
   DeadLetterRecord,
@@ -47,3 +51,5 @@ export type PageArtifactRecord = ArtifactReference & {
   createdAt: Date;
   retentionUntil: Date;
 };
+
+export type { QueuePublicationOutboxRecord };
