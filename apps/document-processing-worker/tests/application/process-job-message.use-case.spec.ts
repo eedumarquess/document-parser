@@ -25,9 +25,22 @@ import {
   InMemoryProcessingResultRepository,
   InMemoryUnitOfWork
 } from '../../src/adapters/out/repositories/in-memory.repositories';
+import type {
+  DocumentRecord,
+  JobAttemptRecord,
+  ProcessingJobRecord
+} from '../../src/contracts/models';
+import type {
+  DocumentRepositoryPort,
+  JobAttemptRepositoryPort,
+  ProcessingJobRepositoryPort
+} from '../../src/contracts/ports';
 import { AuditEventRecorder } from '../../src/application/services/audit-event-recorder.service';
 import { AttemptExecutionCoordinator } from '../../src/application/services/attempt-execution-coordinator.service';
-import { ProcessingContextLoader } from '../../src/application/services/processing-context-loader.service';
+import {
+  InconsistentProcessingContextError,
+  ProcessingContextLoader
+} from '../../src/application/services/processing-context-loader.service';
 import { ProcessingFailureRecoveryService } from '../../src/application/services/processing-failure-recovery.service';
 import { ProcessingSuccessPersister } from '../../src/application/services/processing-success-persister.service';
 import { ProcessJobMessageUseCase } from '../../src/application/use-cases/process-job-message.use-case';
@@ -431,6 +444,116 @@ describe('ProcessJobMessageUseCase', () => {
     expect(await context.results.findByJobId(context.jobId)).toBeUndefined();
   });
 
+  it('quarantines processing when the loaded attempt belongs to another job', async () => {
+    const context = await createWorkerContext(Buffer.from('contexto cruzado'));
+
+    await context.attempts.save({
+      ...(await context.attempts.findById(context.attemptId))!,
+      jobId: 'job-foreign'
+    });
+
+    await expect(executeMessage(context)).rejects.toThrow('Worker context is inconsistent');
+
+    await expect(context.jobs.findById(context.jobId)).resolves.toMatchObject({
+      status: JobStatus.QUEUED
+    });
+    await expect(context.attempts.findById(context.attemptId)).resolves.toMatchObject({
+      status: AttemptStatus.QUEUED,
+      jobId: 'job-foreign'
+    });
+    await expect(context.results.findByJobId(context.jobId)).resolves.toBeUndefined();
+    await expect(context.artifacts.listByJobId(context.jobId)).resolves.toHaveLength(0);
+    await expect(context.deadLetters.list()).resolves.toEqual([
+      expect.objectContaining({
+        jobId: context.jobId,
+        attemptId: context.attemptId,
+        reasonCode: ErrorCode.FATAL_FAILURE,
+        payloadSnapshot: expect.objectContaining({
+          contextIssue: 'relationship_mismatch',
+          mismatches: expect.arrayContaining([
+            expect.objectContaining({
+              rule: 'attempt.jobId === job.jobId',
+              expected: context.jobId,
+              actual: 'job-foreign'
+            })
+          ])
+        })
+      })
+    ]);
+    await expect(context.audit.list()).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          eventType: 'PROCESSING_FAILED',
+          metadata: expect.objectContaining({
+            contextIssue: 'relationship_mismatch',
+            mismatches: expect.arrayContaining([
+              expect.objectContaining({
+                rule: 'attempt.jobId === job.jobId',
+                expected: context.jobId,
+                actual: 'job-foreign'
+              })
+            ])
+          })
+        })
+      ])
+    );
+  });
+
+  it('quarantines processing when the loaded job points to another document', async () => {
+    const context = await createWorkerContext(Buffer.from('contexto cruzado'));
+
+    await context.jobs.save({
+      ...(await context.jobs.findById(context.jobId))!,
+      documentId: 'doc-foreign'
+    });
+
+    await expect(executeMessage(context)).rejects.toThrow('Worker context is inconsistent');
+
+    await expect(context.jobs.findById(context.jobId)).resolves.toMatchObject({
+      status: JobStatus.QUEUED,
+      documentId: 'doc-foreign'
+    });
+    await expect(context.attempts.findById(context.attemptId)).resolves.toMatchObject({
+      status: AttemptStatus.QUEUED
+    });
+    await expect(context.results.findByJobId(context.jobId)).resolves.toBeUndefined();
+    await expect(context.artifacts.listByJobId(context.jobId)).resolves.toHaveLength(0);
+    await expect(context.deadLetters.list()).resolves.toEqual([
+      expect.objectContaining({
+        jobId: context.jobId,
+        attemptId: context.attemptId,
+        reasonCode: ErrorCode.FATAL_FAILURE,
+        payloadSnapshot: expect.objectContaining({
+          contextIssue: 'relationship_mismatch',
+          mismatches: expect.arrayContaining([
+            expect.objectContaining({
+              rule: 'job.documentId === document.documentId',
+              expected: context.documentId,
+              actual: 'doc-foreign'
+            })
+          ])
+        })
+      })
+    ]);
+    await expect(context.audit.list()).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          eventType: 'PROCESSING_FAILED',
+          metadata: expect.objectContaining({
+            contextIssue: 'relationship_mismatch',
+            mismatches: expect.arrayContaining([
+              expect.objectContaining({
+                rule: 'job.documentId === document.documentId',
+                expected: context.documentId,
+                actual: 'doc-foreign'
+              })
+            ])
+          })
+        })
+      ])
+    );
+  });
+
   it('keeps a single logical persisted result in the worker in-memory repository per jobId', async () => {
     const context = await createWorkerContext(Buffer.from('repositorio'));
 
@@ -476,5 +599,205 @@ describe('ProcessJobMessageUseCase', () => {
       payload: 'payload novo',
       status: JobStatus.PARTIAL
     });
+  });
+});
+
+describe('ProcessingContextLoader', () => {
+  const now = new Date('2026-03-27T12:00:00.000Z');
+  const baseDocument: DocumentRecord = {
+    documentId: 'doc-1',
+    hash: 'sha256:doc',
+    originalFileName: 'sample.pdf',
+    mimeType: 'application/pdf',
+    fileSizeBytes: 10,
+    pageCount: 1,
+    sourceType: 'MULTIPART',
+    storageReference: {
+      bucket: 'documents',
+      objectKey: 'original/doc-1/sample.pdf'
+    },
+    retentionUntil: new Date('2026-04-25T12:00:00.000Z'),
+    createdAt: now,
+    updatedAt: now
+  };
+  const baseJob: ProcessingJobRecord = {
+    jobId: 'job-1',
+    documentId: 'doc-1',
+    requestedMode: 'STANDARD',
+    priority: 'NORMAL',
+    queueName: 'document-processing.requested',
+    status: JobStatus.QUEUED,
+    forceReprocess: false,
+    reusedResult: false,
+    pipelineVersion: DEFAULT_PIPELINE_VERSION,
+    outputVersion: DEFAULT_OUTPUT_VERSION,
+    acceptedAt: now,
+    queuedAt: now,
+    requestedBy: buildActor({ role: Role.OWNER }),
+    warnings: [],
+    ingestionTransitions: [{ status: JobStatus.QUEUED, at: now }],
+    createdAt: now,
+    updatedAt: now
+  };
+  const baseAttempt: JobAttemptRecord = {
+    attemptId: 'attempt-1',
+    jobId: 'job-1',
+    attemptNumber: 1,
+    pipelineVersion: DEFAULT_PIPELINE_VERSION,
+    status: AttemptStatus.QUEUED,
+    fallbackUsed: false,
+    createdAt: now
+  };
+
+  it('rejects corrupted repositories when the returned job does not match the message jobId', async () => {
+    const loader = new ProcessingContextLoader(
+      {
+        findById: async () => ({
+          ...baseJob,
+          jobId: 'job-record'
+        }),
+        save: async () => undefined
+      } as ProcessingJobRepositoryPort,
+      {
+        findById: async () => ({
+          ...baseDocument
+        })
+      } as DocumentRepositoryPort,
+      {
+        findById: async () => ({
+          ...baseAttempt,
+          jobId: 'job-record'
+        }),
+        save: async () => undefined,
+        listByJobId: async () => []
+      } as JobAttemptRepositoryPort
+    );
+
+    try {
+      await loader.load({
+        documentId: 'doc-1',
+        jobId: 'job-message',
+        attemptId: 'attempt-1',
+        traceId: 'trace-loader-1',
+        requestedMode: 'STANDARD',
+        pipelineVersion: DEFAULT_PIPELINE_VERSION,
+        publishedAt: now.toISOString()
+      });
+      throw new Error('Expected loader to reject');
+    } catch (error) {
+      expect(error).toBeInstanceOf(InconsistentProcessingContextError);
+      if (!(error instanceof InconsistentProcessingContextError)) {
+        throw error;
+      }
+      expect(error.contextIssue).toBe('relationship_mismatch');
+      expect(error.mismatches).toEqual([
+        {
+          rule: 'message.jobId === job.jobId',
+          expected: 'job-message',
+          actual: 'job-record'
+        }
+      ]);
+    }
+  });
+
+  it('rejects corrupted repositories when the returned document does not match the message documentId', async () => {
+    const loader = new ProcessingContextLoader(
+      {
+        findById: async () => ({
+          ...baseJob,
+          documentId: 'doc-record'
+        }),
+        save: async () => undefined
+      } as ProcessingJobRepositoryPort,
+      {
+        findById: async () => ({
+          ...baseDocument,
+          documentId: 'doc-record'
+        })
+      } as DocumentRepositoryPort,
+      {
+        findById: async () => ({
+          ...baseAttempt
+        }),
+        save: async () => undefined,
+        listByJobId: async () => []
+      } as JobAttemptRepositoryPort
+    );
+
+    try {
+      await loader.load({
+        documentId: 'doc-message',
+        jobId: 'job-1',
+        attemptId: 'attempt-1',
+        traceId: 'trace-loader-2',
+        requestedMode: 'STANDARD',
+        pipelineVersion: DEFAULT_PIPELINE_VERSION,
+        publishedAt: now.toISOString()
+      });
+      throw new Error('Expected loader to reject');
+    } catch (error) {
+      expect(error).toBeInstanceOf(InconsistentProcessingContextError);
+      if (!(error instanceof InconsistentProcessingContextError)) {
+        throw error;
+      }
+      expect(error.contextIssue).toBe('relationship_mismatch');
+      expect(error.mismatches).toEqual([
+        {
+          rule: 'message.documentId === document.documentId',
+          expected: 'doc-message',
+          actual: 'doc-record'
+        }
+      ]);
+    }
+  });
+
+  it('rejects corrupted repositories when the returned attempt does not match the message attemptId', async () => {
+    const loader = new ProcessingContextLoader(
+      {
+        findById: async () => ({
+          ...baseJob
+        }),
+        save: async () => undefined
+      } as ProcessingJobRepositoryPort,
+      {
+        findById: async () => ({
+          ...baseDocument
+        })
+      } as DocumentRepositoryPort,
+      {
+        findById: async () => ({
+          ...baseAttempt,
+          attemptId: 'attempt-record'
+        }),
+        save: async () => undefined,
+        listByJobId: async () => []
+      } as JobAttemptRepositoryPort
+    );
+
+    try {
+      await loader.load({
+        documentId: 'doc-1',
+        jobId: 'job-1',
+        attemptId: 'attempt-message',
+        traceId: 'trace-loader-3',
+        requestedMode: 'STANDARD',
+        pipelineVersion: DEFAULT_PIPELINE_VERSION,
+        publishedAt: now.toISOString()
+      });
+      throw new Error('Expected loader to reject');
+    } catch (error) {
+      expect(error).toBeInstanceOf(InconsistentProcessingContextError);
+      if (!(error instanceof InconsistentProcessingContextError)) {
+        throw error;
+      }
+      expect(error.contextIssue).toBe('relationship_mismatch');
+      expect(error.mismatches).toEqual([
+        {
+          rule: 'message.attemptId === attempt.attemptId',
+          expected: 'attempt-message',
+          actual: 'attempt-record'
+        }
+      ]);
+    }
   });
 });
