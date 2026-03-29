@@ -4,8 +4,7 @@ import {
   createDeduplicatedJob,
   createPendingAttempt,
   createSubmissionJob,
-  markAttemptAsQueued,
-  markJobAsQueued,
+  markJobAsPublishPending,
   markJobAsStored,
   markJobAsValidated,
   type JobAttemptRecord
@@ -16,9 +15,7 @@ import {
   DEFAULT_PIPELINE_VERSION,
   JobStatus,
   RedactionPolicyService,
-  TransientFailureError,
   type AuditActor,
-  type ProcessingJobRequestedMessage,
   ValidationError
 } from '@document-parser/shared-kernel';
 import type { JobResponse } from '../../contracts/http';
@@ -32,12 +29,12 @@ import type {
   HashingPort,
   IdGeneratorPort,
   JobAttemptRepositoryPort,
-  JobPublisherPort,
   LoggingPort,
   MetricsPort,
   PageCounterPort,
   ProcessingJobRepositoryPort,
   ProcessingResultRepositoryPort,
+  QueuePublicationOutboxRepositoryPort,
   TracingPort,
   UnitOfWorkPort
 } from '../../contracts/ports';
@@ -50,7 +47,7 @@ import { RetentionPolicyService } from '../../domain/services/retention-policy.s
 import { CompatibilityKey } from '../../domain/value-objects/compatibility-key';
 import { DocumentHash } from '../../domain/value-objects/document-hash';
 import { AuditEventRecorder } from '../services/audit-event-recorder.service';
-import { QueuePublicationFailureHandler } from '../services/queue-publication-failure-handler.service';
+import { buildOrchestratorQueuePublicationOutboxRecord } from '../services/queue-publication-outbox-dispatcher.service';
 import type { SubmitDocumentCommand } from '../commands/submit-document.command';
 
 @Injectable()
@@ -70,7 +67,8 @@ export class SubmitDocumentUseCase {
     @Inject(TOKENS.RESULT_REPOSITORY) private readonly results: ProcessingResultRepositoryPort,
     @Inject(TOKENS.COMPATIBLE_RESULT_LOOKUP)
     private readonly compatibleResults: CompatibleResultLookupPort,
-    @Inject(TOKENS.JOB_PUBLISHER) private readonly publisher: JobPublisherPort,
+    @Inject(TOKENS.QUEUE_PUBLICATION_OUTBOX_REPOSITORY)
+    private readonly outbox: QueuePublicationOutboxRepositoryPort,
     @Inject(TOKENS.LOGGING) private readonly logging: LoggingPort,
     @Inject(TOKENS.METRICS) private readonly metrics: MetricsPort,
     @Inject(TOKENS.TRACING) private readonly tracing: TracingPort,
@@ -81,8 +79,7 @@ export class SubmitDocumentUseCase {
     private readonly documentStoragePolicy: DocumentStoragePolicy,
     private readonly retentionPolicy: RetentionPolicyService,
     private readonly redactionPolicy: RedactionPolicyService,
-    private readonly auditEventRecorder: AuditEventRecorder,
-    private readonly queuePublicationFailureHandler: QueuePublicationFailureHandler
+    private readonly auditEventRecorder: AuditEventRecorder
   ) {}
 
   public async execute(command: SubmitDocumentCommand, actor: AuditActor, traceId: string): Promise<JobResponse> {
@@ -194,55 +191,18 @@ export class SubmitDocumentUseCase {
             now
           });
 
-          try {
-            await this.publishProcessingJobRequested({
-              documentId: canonicalDocument.document.documentId,
-              jobId: persistedSubmission.job.jobId,
-              attemptId: persistedSubmission.attempt.attemptId,
-              traceId,
-              requestedMode,
-              pipelineVersion,
-              publishedAt: now.toISOString()
-            });
-          } catch (error) {
-            await this.queuePublicationFailureHandler.handle({
-              actor,
-              job: persistedSubmission.job,
-              traceId,
-              now,
-              errorMessage: this.buildPublishErrorMessage(error),
-              eventType: 'PROCESSING_JOB_QUEUEING_FAILED',
-              metadata: {
-                documentId: persistedSubmission.job.documentId,
-                jobId: persistedSubmission.job.jobId,
-                errorMessage: this.buildPublishErrorMessage(error)
-              }
-            });
-            throw new TransientFailureError('Processing job persisted but queue publication failed', {
-              jobId: persistedSubmission.job.jobId,
-              documentId: persistedSubmission.job.documentId
-            });
-          }
-
-          const queuedJob = await this.finalizeQueuedJob({
-            actor,
-            job: persistedSubmission.job,
-            attempt: persistedSubmission.attempt,
-            traceId,
-            now
-          });
-
           await this.logging.log({
             level: 'info',
-            message: 'Document submission queued successfully',
+            message: 'Document submission accepted for asynchronous queue publication',
             context: 'SubmitDocumentUseCase',
             traceId,
             data: this.redactionPolicy.redact(
               {
-                jobId: queuedJob.jobId,
-                documentId: queuedJob.documentId,
+                jobId: persistedSubmission.job.jobId,
+                documentId: persistedSubmission.job.documentId,
                 operation: 'submit_document',
-                requestedMode: queuedJob.requestedMode
+                requestedMode: persistedSubmission.job.requestedMode,
+                status: persistedSubmission.job.status
               },
               {
                 context: 'log'
@@ -251,16 +211,25 @@ export class SubmitDocumentUseCase {
             recordedAt: now
           });
           await this.metrics.increment({
-            name: 'orchestrator.submit_document.succeeded',
+            name: 'orchestrator.queue_publication_outbox.enqueued',
             traceId,
             tags: {
-              jobId: queuedJob.jobId,
-              documentId: queuedJob.documentId,
+              ownerService: 'orchestrator-api',
+              flowType: 'submission',
+              dispatchKind: 'publish_requested'
+            }
+          });
+          await this.metrics.increment({
+            name: 'orchestrator.submit_document.accepted',
+            traceId,
+            tags: {
+              jobId: persistedSubmission.job.jobId,
+              documentId: persistedSubmission.job.documentId,
               operation: 'submit_document'
             }
           });
 
-          return this.toJobResponse(queuedJob);
+          return this.toJobResponse(persistedSubmission.job);
         } catch (error) {
           await this.metrics.increment({
             name: 'orchestrator.submit_document.failed',
@@ -406,8 +375,12 @@ export class SubmitDocumentUseCase {
       }),
       now: input.now
     });
-    const job = markJobAsStored({
+    const storedJob = markJobAsStored({
       job: validatedJob,
+      now: input.now
+    });
+    const job = markJobAsPublishPending({
+      job: storedJob,
       now: input.now
     });
     const attempt = createPendingAttempt({
@@ -438,6 +411,35 @@ export class SubmitDocumentUseCase {
 
         await this.jobs.save(job);
         await this.attempts.save(attempt);
+        await this.outbox.save(
+          buildOrchestratorQueuePublicationOutboxRecord({
+            outboxId: this.idGenerator.next('outbox'),
+            flowType: 'submission',
+            dispatchKind: 'publish_requested',
+            queueName: job.queueName,
+            messageBase: {
+              documentId: job.documentId,
+              jobId: job.jobId,
+              attemptId: attempt.attemptId,
+              traceId: input.traceId,
+              requestedMode: input.requestedMode,
+              pipelineVersion: job.pipelineVersion
+            },
+            finalizationMetadata: {
+              actor: input.actor,
+              auditEventType: 'PROCESSING_JOB_QUEUED',
+              auditAggregateType: 'PROCESSING_JOB',
+              auditAggregateId: job.jobId,
+              auditMetadata: {
+                documentId: input.document.documentId,
+                jobId: job.jobId,
+                attemptId: attempt.attemptId,
+                requestedMode: input.requestedMode
+              }
+            },
+            now: input.now
+          })
+        );
         await this.auditEventRecorder.record({
           eventType: 'DOCUMENT_ACCEPTED',
           aggregateType: 'PROCESSING_JOB',
@@ -461,47 +463,6 @@ export class SubmitDocumentUseCase {
     }
 
     return { job, attempt };
-  }
-
-  private async publishProcessingJobRequested(message: ProcessingJobRequestedMessage): Promise<void> {
-    await this.publisher.publishRequested(message);
-  }
-
-  private async finalizeQueuedJob(input: {
-    actor: AuditActor;
-    job: ProcessingJobRecord;
-    attempt: JobAttemptRecord;
-    traceId: string;
-    now: Date;
-  }): Promise<ProcessingJobRecord> {
-    const queuedJob = markJobAsQueued({
-      job: input.job,
-      now: input.now
-    });
-    const queuedAttempt = markAttemptAsQueued({
-      attempt: input.attempt
-    });
-
-    await this.unitOfWork.runInTransaction(async () => {
-      await this.jobs.save(queuedJob);
-      await this.attempts.save(queuedAttempt);
-      await this.auditEventRecorder.record({
-        eventType: 'PROCESSING_JOB_QUEUED',
-        aggregateType: 'PROCESSING_JOB',
-        aggregateId: input.job.jobId,
-        traceId: input.traceId,
-        actor: input.actor,
-        metadata: {
-          documentId: input.job.documentId,
-          jobId: input.job.jobId,
-          attemptId: queuedAttempt.attemptId,
-          requestedMode: input.job.requestedMode
-        },
-        createdAt: input.now
-      });
-    });
-
-    return queuedJob;
   }
 
   private async finalizeDeduplicatedJob(input: {
@@ -569,10 +530,6 @@ export class SubmitDocumentUseCase {
     });
 
     return this.toJobResponse(job);
-  }
-
-  private buildPublishErrorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : 'Unexpected queue publishing failure';
   }
 
   private toJobResponse(job: {

@@ -80,46 +80,29 @@ export class ReprocessDocumentUseCase {
                 createdAt: now
               });
             },
-            onQueued: async ({ queuedJob, queuedAttempt }) => {
-              await this.auditEventRecorder.record({
-                eventType: 'PROCESSING_JOB_QUEUED',
-                aggregateType: 'PROCESSING_JOB',
-                aggregateId: queuedJob.jobId,
-                traceId,
-                actor,
-                metadata: {
-                  jobId: queuedJob.jobId,
-                  reprocessOfJobId: originalJob.jobId,
-                  attemptId: queuedAttempt.attemptId
-                },
-                createdAt: now
-              });
+            queuedFinalizationMetadata: {
+              actor,
+              auditEventType: 'PROCESSING_JOB_QUEUED',
+              auditAggregateType: 'PROCESSING_JOB',
+              auditAggregateId: undefined,
+              auditMetadata: {
+                reprocessOfJobId: originalJob.jobId
+              }
             },
-            publishFailure: {
-              eventType: 'PROCESSING_JOB_QUEUEING_FAILED',
-              failureMessage: 'Reprocessing job persisted but queue publication failed',
-              context: ({ job }) => ({
-                jobId: job.jobId,
-                documentId: job.documentId
-              }),
-              metadata: ({ job, errorMessage }) => ({
-                jobId: job.jobId,
-                errorMessage
-              })
-            }
           });
 
           await this.logging.log({
             level: 'info',
-            message: 'Reprocessing job queued successfully',
+            message: 'Reprocessing job accepted for asynchronous queue publication',
             context: 'ReprocessDocumentUseCase',
             traceId,
             data: this.redactionPolicy.redact(
               {
-                jobId: derived.queuedJob.jobId,
-                documentId: derived.queuedJob.documentId,
+                jobId: derived.job.jobId,
+                documentId: derived.job.documentId,
                 reprocessOfJobId: originalJob.jobId,
-                operation: 'reprocess_document'
+                operation: 'reprocess_document',
+                status: derived.job.status
               },
               {
                 context: 'log'
@@ -128,16 +111,25 @@ export class ReprocessDocumentUseCase {
             recordedAt: now
           });
           await this.metrics.increment({
-            name: 'orchestrator.reprocess_document.succeeded',
+            name: 'orchestrator.queue_publication_outbox.enqueued',
             traceId,
             tags: {
-              jobId: derived.queuedJob.jobId,
-              documentId: derived.queuedJob.documentId,
+              ownerService: 'orchestrator-api',
+              flowType: 'reprocess',
+              dispatchKind: 'publish_requested'
+            }
+          });
+          await this.metrics.increment({
+            name: 'orchestrator.reprocess_document.accepted',
+            traceId,
+            tags: {
+              jobId: derived.job.jobId,
+              documentId: derived.job.documentId,
               operation: 'reprocess_document'
             }
           });
 
-          return toJobResponse(derived.queuedJob);
+          return toJobResponse(derived.job);
         } catch (error) {
           await this.metrics.increment({
             name: 'orchestrator.reprocess_document.failed',
