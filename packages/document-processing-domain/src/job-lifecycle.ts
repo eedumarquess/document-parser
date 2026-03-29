@@ -136,8 +136,21 @@ export function markJobAsStored(input: { job: ProcessingJobRecord; now: Date }):
   };
 }
 
+export function markJobAsPublishPending(input: { job: ProcessingJobRecord; now: Date }): ProcessingJobRecord {
+  ensureJobStatus(input.job, [JobStatus.STORED], 'mark job as publish pending');
+
+  return {
+    ...input.job,
+    status: JobStatus.PUBLISH_PENDING,
+    errorCode: undefined,
+    errorMessage: undefined,
+    ingestionTransitions: appendTransition(input.job.ingestionTransitions, JobStatus.PUBLISH_PENDING, input.now),
+    updatedAt: input.now
+  };
+}
+
 export function markJobAsQueued(input: { job: ProcessingJobRecord; now: Date }): ProcessingJobRecord {
-  ensureJobStatus(input.job, [JobStatus.STORED], 'mark job as queued');
+  ensureJobStatus(input.job, [JobStatus.PUBLISH_PENDING], 'mark job as queued');
 
   return {
     ...input.job,
@@ -150,14 +163,38 @@ export function markJobAsQueued(input: { job: ProcessingJobRecord; now: Date }):
   };
 }
 
+export function finalizeJobQueuePublication(input: {
+  job: ProcessingJobRecord;
+  queuedAt: Date;
+  now: Date;
+}): ProcessingJobRecord {
+  if (input.job.status === JobStatus.PUBLISH_PENDING) {
+    return markJobAsQueued({
+      job: input.job,
+      now: input.queuedAt
+    });
+  }
+
+  return {
+    ...input.job,
+    queuedAt: input.job.queuedAt ?? input.queuedAt,
+    errorCode: input.job.status === JobStatus.QUEUED ? undefined : input.job.errorCode,
+    errorMessage: input.job.status === JobStatus.QUEUED ? undefined : input.job.errorMessage,
+    ingestionTransitions: appendTransition(input.job.ingestionTransitions, JobStatus.QUEUED, input.queuedAt),
+    updatedAt: input.now
+  };
+}
+
 export function rescheduleJobForRetry(input: { job: ProcessingJobRecord; now: Date }): ProcessingJobRecord {
   ensureJobStatus(input.job, [JobStatus.PROCESSING], 'reschedule job for retry');
 
   return {
     ...input.job,
-    status: JobStatus.QUEUED,
+    status: JobStatus.PUBLISH_PENDING,
+    queuedAt: undefined,
     errorCode: undefined,
     errorMessage: undefined,
+    ingestionTransitions: appendTransition(input.job.ingestionTransitions, JobStatus.PUBLISH_PENDING, input.now),
     updatedAt: input.now
   };
 }
@@ -249,12 +286,20 @@ export function markAttemptAsQueued(input: { attempt: JobAttemptRecord }): JobAt
   };
 }
 
+export function finalizeAttemptQueuePublication(input: { attempt: JobAttemptRecord }): JobAttemptRecord {
+  if (input.attempt.status === AttemptStatus.PENDING) {
+    return markAttemptAsQueued(input);
+  }
+
+  return input.attempt;
+}
+
 export function startPendingAttempt(input: {
   job: ProcessingJobRecord;
   attempt: JobAttemptRecord;
   now: Date;
 }): { job: ProcessingJobRecord; attempt: JobAttemptRecord } {
-  ensureJobStatus(input.job, [JobStatus.QUEUED], 'start attempt');
+  ensureJobStatus(input.job, [JobStatus.PUBLISH_PENDING, JobStatus.QUEUED], 'start attempt');
   ensureAttemptStatus(input.attempt, [AttemptStatus.PENDING, AttemptStatus.QUEUED], 'start attempt');
 
   return {

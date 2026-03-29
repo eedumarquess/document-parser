@@ -11,6 +11,7 @@ export type IngestionTransitionRecord = {
     | JobStatus.RECEIVED
     | JobStatus.VALIDATED
     | JobStatus.STORED
+    | JobStatus.PUBLISH_PENDING
     | JobStatus.DEDUPLICATED
     | JobStatus.REPROCESSED
     | JobStatus.QUEUED;
