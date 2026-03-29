@@ -1,4 +1,10 @@
-import type { ErrorCode, JobStatus } from '@document-parser/shared-kernel';
+import type {
+  ErrorCode,
+  JobStatus,
+  QueuePublicationDispatchKind,
+  QueuePublicationFlowType,
+  QueuePublicationOutboxStatus
+} from '@document-parser/shared-kernel';
 
 export type JobResponse = {
   jobId: string;
@@ -122,6 +128,23 @@ export type ArtifactOperationalResponse = {
   retentionUntil: string;
 };
 
+export type QueuePublicationOperationalResponse = {
+  outboxId: string;
+  status: QueuePublicationOutboxStatus;
+  ownerService: string;
+  flowType: QueuePublicationFlowType;
+  dispatchKind: QueuePublicationDispatchKind;
+  queueName: string;
+  attemptId: string;
+  retryAttempt?: number;
+  publishAttempts: number;
+  availableAt: string;
+  lastError?: string;
+  publishedAt?: string;
+  updatedAt: string;
+  createdAt: string;
+};
+
 export type TelemetryEventOperationalResponse =
   | {
       telemetryEventId: string;
@@ -172,7 +195,7 @@ export type TelemetryEventOperationalResponse =
     };
 
 export type JobTimelineItemResponse = {
-  source: 'job' | 'attempt' | 'audit' | 'dead_letter' | 'telemetry' | 'result';
+  source: 'job' | 'attempt' | 'audit' | 'dead_letter' | 'telemetry' | 'result' | 'outbox';
   occurredAt: string;
   title: string;
   detail: string;
@@ -185,6 +208,7 @@ export type JobOperationalContextResponse = {
   summary: JobOperationalSummaryResponse;
   attempts: JobAttemptOperationalResponse[];
   result?: ProcessingResultOperationalResponse;
+  queuePublication?: QueuePublicationOperationalResponse;
   auditEvents: AuditEventOperationalResponse[];
   deadLetters: DeadLetterOperationalResponse[];
   artifacts: ArtifactOperationalResponse[];

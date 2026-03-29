@@ -197,6 +197,24 @@ export function renderJobOperationalPanel(context: JobOperationalContextResponse
       </section>
 
       <section>
+        <h2>Queue Publication</h2>
+        ${context.queuePublication === undefined
+          ? '<p>No queue publication outbox record for this job.</p>'
+          : `
+            <div class="grid">
+              ${summaryCard('Status', context.queuePublication.status)}
+              ${summaryCard('Owner', context.queuePublication.ownerService)}
+              ${summaryCard('Flow', context.queuePublication.flowType)}
+              ${summaryCard('Dispatch', context.queuePublication.dispatchKind)}
+              ${summaryCard('Publish Attempts', `${context.queuePublication.publishAttempts}`)}
+              ${summaryCard('Available At', context.queuePublication.availableAt)}
+              ${summaryCard('Published At', context.queuePublication.publishedAt ?? 'pending')}
+              ${summaryCard('Last Error', context.queuePublication.lastError ?? 'none')}
+            </div>
+          `}
+      </section>
+
+      <section>
         <h2>Timeline</h2>
         <div class="timeline">
           ${context.timeline.map((item: JobOperationalContextResponse['timeline'][number]) => `

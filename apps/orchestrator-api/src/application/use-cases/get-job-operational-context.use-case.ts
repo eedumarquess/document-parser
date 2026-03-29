@@ -13,6 +13,7 @@ import type {
   JobOperationalContextResponse,
   JobTimelineItemResponse,
   ProcessingResultOperationalResponse,
+  QueuePublicationOperationalResponse,
   TelemetryEventOperationalResponse
 } from '../../contracts/http';
 import type {
@@ -27,6 +28,7 @@ import type {
   PageArtifactRepositoryPort,
   ProcessingJobRepositoryPort,
   ProcessingResultRepositoryPort,
+  QueuePublicationOutboxRepositoryPort,
   TelemetryEventRepositoryPort,
   TracingPort
 } from '../../contracts/ports';
@@ -37,7 +39,8 @@ import type {
   JobAttemptRecord,
   PageArtifactRecord,
   ProcessingJobRecord,
-  ProcessingResultRecord
+  ProcessingResultRecord,
+  QueuePublicationOutboxRecord
 } from '../../contracts/models';
 import { RetentionPolicyService } from '../../domain/services/retention-policy.service';
 import { ArtifactPreviewService } from '../services/artifact-preview.service';
@@ -54,6 +57,8 @@ export class GetJobOperationalContextUseCase {
     @Inject(TOKENS.RESULT_REPOSITORY) private readonly results: ProcessingResultRepositoryPort,
     @Inject(TOKENS.PAGE_ARTIFACT_REPOSITORY) private readonly artifacts: PageArtifactRepositoryPort,
     @Inject(TOKENS.DEAD_LETTER_REPOSITORY) private readonly deadLetters: DeadLetterRepositoryPort,
+    @Inject(TOKENS.QUEUE_PUBLICATION_OUTBOX_REPOSITORY)
+    private readonly outbox: QueuePublicationOutboxRepositoryPort,
     @Inject(TOKENS.AUDIT) private readonly audit: AuditPort,
     @Inject(TOKENS.TELEMETRY_REPOSITORY)
     private readonly telemetry: TelemetryEventRepositoryPort,
@@ -91,16 +96,17 @@ export class GetJobOperationalContextUseCase {
             throw new NotFoundError('Processing job not found', { jobId: query.jobId });
           }
 
-          const [attempts, result, auditEvents, deadLetters, artifacts, jobTelemetry] = await Promise.all([
+          const [attempts, result, queuePublication, auditEvents, deadLetters, artifacts, jobTelemetry] = await Promise.all([
             this.attempts.listByJobId(query.jobId),
             this.results.findByJobId(query.jobId),
+            this.outbox.findLatestByJobId(query.jobId),
             this.audit.listByJobId(query.jobId),
             this.deadLetters.listByJobId(query.jobId),
             this.artifacts.listByJobId(query.jobId),
             this.telemetry.listByJobId(query.jobId)
           ]);
 
-          const traceIds = collectTraceIds(auditEvents, deadLetters, jobTelemetry);
+          const traceIds = collectTraceIds(auditEvents, deadLetters, jobTelemetry, queuePublication);
           const attemptIds = attempts.map((attempt) => attempt.attemptId);
 
           const [extraAuditEvents, extraDeadLetters, traceTelemetry, attemptTelemetry] = await Promise.all([
@@ -175,6 +181,8 @@ export class GetJobOperationalContextUseCase {
             summary: toSummaryResponse(job),
             attempts: attempts.map(toAttemptResponse),
             result: result === undefined ? undefined : toOperationalResultResponse(result),
+            queuePublication:
+              queuePublication === undefined ? undefined : toQueuePublicationResponse(queuePublication),
             auditEvents: allAuditEvents.map(toAuditResponse),
             deadLetters: allDeadLetters.map(toDeadLetterResponse),
             artifacts: artifacts.map((artifact) => this.artifactPreviewService.toResponse(artifact)),
@@ -184,6 +192,7 @@ export class GetJobOperationalContextUseCase {
               job,
               attempts,
               result,
+              queuePublication,
               auditEvents: allAuditEvents,
               deadLetters: allDeadLetters,
               telemetryEvents: allTelemetryEvents
@@ -334,6 +343,27 @@ function toDeadLetterResponse(record: DeadLetterRecord): DeadLetterOperationalRe
   };
 }
 
+function toQueuePublicationResponse(
+  record: QueuePublicationOutboxRecord
+): QueuePublicationOperationalResponse {
+  return {
+    outboxId: record.outboxId,
+    status: record.status,
+    ownerService: record.ownerService,
+    flowType: record.flowType,
+    dispatchKind: record.dispatchKind,
+    queueName: record.queueName,
+    attemptId: record.attemptId,
+    retryAttempt: record.retryAttempt,
+    publishAttempts: record.publishAttempts,
+    availableAt: record.availableAt.toISOString(),
+    lastError: record.lastError,
+    publishedAt: record.publishedAt?.toISOString(),
+    updatedAt: record.updatedAt.toISOString(),
+    createdAt: record.createdAt.toISOString()
+  };
+}
+
 function toTelemetryResponse(event: TelemetryEventRecord): TelemetryEventOperationalResponse {
   if (event.kind === 'log') {
     return {
@@ -394,6 +424,7 @@ function buildTimeline(input: {
   job: ProcessingJobRecord;
   attempts: JobAttemptRecord[];
   result?: ProcessingResultRecord;
+  queuePublication?: QueuePublicationOutboxRecord;
   auditEvents: AuditEventRecord[];
   deadLetters: DeadLetterRecord[];
   telemetryEvents: TelemetryEventRecord[];
@@ -420,6 +451,23 @@ function buildTimeline(input: {
             occurredAt: input.result.createdAt.toISOString(),
             title: `Result ${input.result.status}`,
             detail: `Engine ${input.result.engineUsed} with confidence ${input.result.confidence.toFixed(2)}`
+          }
+        ]),
+    ...(input.queuePublication === undefined
+      ? []
+      : [
+          {
+            source: 'outbox' as const,
+            occurredAt: (
+              input.queuePublication.publishedAt ??
+              input.queuePublication.updatedAt ??
+              input.queuePublication.createdAt
+            ).toISOString(),
+            title: `Queue publication ${input.queuePublication.status}`,
+            detail: `${input.queuePublication.ownerService} ${input.queuePublication.flowType} via ${input.queuePublication.dispatchKind}`,
+            traceId: input.queuePublication.messageBase.traceId,
+            attemptId: input.queuePublication.attemptId,
+            serviceName: input.queuePublication.ownerService
           }
         ]),
     ...input.auditEvents.map((event) => ({
@@ -464,12 +512,14 @@ function buildTimeline(input: {
 function collectTraceIds(
   auditEvents: AuditEventRecord[],
   deadLetters: DeadLetterRecord[],
-  telemetryEvents: TelemetryEventRecord[]
+  telemetryEvents: TelemetryEventRecord[],
+  queuePublication?: QueuePublicationOutboxRecord
 ): string[] {
   return [...new Set([
     ...auditEvents.map((event) => event.traceId),
     ...deadLetters.map((record) => record.traceId),
-    ...telemetryEvents.map((event) => event.traceId).filter((value): value is string => value !== undefined)
+    ...telemetryEvents.map((event) => event.traceId).filter((value): value is string => value !== undefined),
+    ...(queuePublication === undefined ? [] : [queuePublication.messageBase.traceId])
   ])].sort();
 }
 
