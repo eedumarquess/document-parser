@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { Inject, Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import {
+  ErrorCode,
   QueuePublicationOutboxStatus,
   type AuditActor,
   type ProcessingJobRequestedMessage,
@@ -27,6 +28,7 @@ import type {
 import { TOKENS } from '../../contracts/tokens';
 import { RetentionPolicyService } from '../../domain/services/retention-policy.service';
 import { AuditEventRecorder } from './audit-event-recorder.service';
+import { QueuePublicationFailureHandler } from './queue-publication-failure-handler.service';
 
 export const ORCHESTRATOR_QUEUE_PUBLICATION_OWNER_SERVICE = 'orchestrator-api';
 
@@ -101,7 +103,8 @@ export class QueuePublicationOutboxDispatcherService implements OnModuleInit, On
     @Inject(TOKENS.QUEUE_PUBLICATION_DISPATCHER_RUNTIME)
     private readonly runtime: QueuePublicationDispatcherRuntime,
     private readonly retentionPolicy: RetentionPolicyService,
-    private readonly auditEventRecorder: AuditEventRecorder
+    private readonly auditEventRecorder: AuditEventRecorder,
+    private readonly queuePublicationFailureHandler: QueuePublicationFailureHandler
   ) {}
 
   public onModuleInit(): void {
@@ -157,7 +160,8 @@ export class QueuePublicationOutboxDispatcherService implements OnModuleInit, On
         tags: this.buildMetricTags(record)
       });
     } catch (error) {
-      await this.markPublishFailed(record, error instanceof Error ? error.message : 'Unexpected outbox dispatch failure');
+      const errorMessage = error instanceof Error ? error.message : 'Unexpected outbox dispatch failure';
+      await this.finalizePublishFailed(record, errorMessage);
       await this.metrics.increment({
         name: 'orchestrator.queue_publication_outbox.publish_failed',
         tags: this.buildMetricTags(record)
@@ -171,7 +175,7 @@ export class QueuePublicationOutboxDispatcherService implements OnModuleInit, On
           outboxId: record.outboxId,
           flowType: record.flowType,
           dispatchKind: record.dispatchKind,
-          errorMessage: error instanceof Error ? error.message : 'Unexpected outbox dispatch failure'
+          errorMessage
         },
         recordedAt: this.clock.now()
       });
@@ -204,7 +208,7 @@ export class QueuePublicationOutboxDispatcherService implements OnModuleInit, On
         this.attempts.findById(record.attemptId)
       ]);
 
-      if (currentOutbox === undefined || currentOutbox.status === QueuePublicationOutboxStatus.PUBLISHED) {
+      if (currentOutbox === undefined || currentOutbox.status !== QueuePublicationOutboxStatus.PENDING) {
         return;
       }
       if (currentJob === undefined) {
@@ -262,20 +266,46 @@ export class QueuePublicationOutboxDispatcherService implements OnModuleInit, On
     });
   }
 
-  private async markPublishFailed(record: QueuePublicationOutboxRecord, errorMessage: string): Promise<void> {
+  private async finalizePublishFailed(record: QueuePublicationOutboxRecord, errorMessage: string): Promise<void> {
     const now = this.clock.now();
-    const current = await this.outbox.findById(record.outboxId);
-    if (current === undefined || current.status === QueuePublicationOutboxStatus.PUBLISHED) {
+    const metadata = record.finalizationMetadata as OrchestratorQueuePublicationFinalizationMetadata | undefined;
+    const [currentOutbox, currentJob, currentAttempt] = await Promise.all([
+      this.outbox.findById(record.outboxId),
+      this.jobs.findById(record.jobId),
+      this.attempts.findById(record.attemptId)
+    ]);
+
+    if (currentOutbox === undefined || currentOutbox.status !== QueuePublicationOutboxStatus.PENDING) {
       return;
     }
+    if (currentJob === undefined) {
+      throw new Error(`Missing job ${record.jobId} during outbox failure finalization`);
+    }
+    if (currentAttempt === undefined) {
+      throw new Error(`Missing attempt ${record.attemptId} during outbox failure finalization`);
+    }
+    if (metadata === undefined) {
+      throw new Error(`Missing outbox finalization metadata for ${record.outboxId}`);
+    }
 
-    await this.outbox.save({
-      ...current,
-      availableAt: new Date(now.getTime() + calculateQueuePublicationRetryDelayMs(current.publishAttempts)),
-      leaseOwner: undefined,
-      leaseExpiresAt: undefined,
-      lastError: errorMessage,
-      updatedAt: now
+    await this.queuePublicationFailureHandler.handle({
+      actor: metadata.actor,
+      job: currentJob,
+      attempt: currentAttempt,
+      outboxRecord: currentOutbox,
+      traceId: record.messageBase.traceId,
+      now,
+      errorMessage,
+      metadata: {
+        jobId: currentJob.jobId,
+        attemptId: currentAttempt.attemptId,
+        outboxId: currentOutbox.outboxId,
+        documentId: currentJob.documentId,
+        flowType: currentOutbox.flowType,
+        dispatchKind: currentOutbox.dispatchKind,
+        errorCode: ErrorCode.TRANSIENT_FAILURE,
+        errorMessage
+      }
     });
   }
 
@@ -286,8 +316,4 @@ export class QueuePublicationOutboxDispatcherService implements OnModuleInit, On
       dispatchKind: record.dispatchKind
     };
   }
-}
-
-function calculateQueuePublicationRetryDelayMs(publishAttempts: number): number {
-  return Math.min(1000 * (2 ** Math.max(0, publishAttempts - 1)), 30_000);
 }
