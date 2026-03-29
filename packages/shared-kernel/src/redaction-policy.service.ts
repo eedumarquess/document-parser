@@ -4,9 +4,9 @@ const REDACTED_BINARY = '[REDACTED_BINARY]';
 const HARD_REDACT_KEY_PATTERN =
   /(^|\.)(payload|rawText|rawPayload|promptText|responseText|buffer|binary|content|original|originalBuffer)$/i;
 const OPERATIONAL_KEY_PATTERN =
-  /(^|\.)(traceId|actorId|role|jobId|documentId|attemptId|resultId|dlqEventId|sourceJobId|sourceResultId|reprocessOfJobId|queueName|status|eventType|aggregateType|aggregateId|requestedMode|priority|pipelineVersion|outputVersion|promptVersion|modelVersion|normalizationVersion|fallbackReason|artifactType|pageNumber|retryCount|retryDelayMs|attemptNumber|confidence|latencyMs|totalLatencyMs|fileSizeBytes|pageCount|mimeType|forceReprocess|reusedResult|retrySourceAttemptId|reasonCode|errorCode|hash|warnings|missingResources|contextIssue|mismatches|rule|expected|actual|publishedAt|createdAt|updatedAt|retentionUntil|acceptedAt|queuedAt|startedAt|finishedAt)$/i;
+  /(^|\.)(traceId|actorId|role|jobId|documentId|attemptId|resultId|dlqEventId|sourceJobId|sourceResultId|reprocessOfJobId|outboxId|ownerService|flowType|dispatchKind|queueName|status|eventType|aggregateType|aggregateId|requestedMode|priority|pipelineVersion|outputVersion|promptVersion|modelVersion|normalizationVersion|fallbackReason|artifactType|pageNumber|retryCount|retryDelayMs|retryAttempt|attemptNumber|confidence|latencyMs|totalLatencyMs|fileSizeBytes|pageCount|mimeType|forceReprocess|reusedResult|retrySourceAttemptId|reasonCode|errorCode|hash|warnings|missingResources|contextIssue|mismatches|rule|expected|actual|publishAttempts|availableAt|leaseOwner|leaseExpiresAt|publishedAt|createdAt|updatedAt|retentionUntil|acceptedAt|queuedAt|startedAt|finishedAt)$/i;
 const FREE_TEXT_KEY_PATTERN =
-  /(^|\.)(reason|errorMessage|message|description|details|note|notes|comment|comments|input|output|query|text)$/i;
+  /(^|\.)(reason|errorMessage|lastError|message|description|details|note|notes|comment|comments|input|output|query|text)$/i;
 
 const SEMANTIC_REPLACEMENTS: Array<{ pattern: RegExp; replacement: string }> = [
   {
