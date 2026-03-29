@@ -15,17 +15,15 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApplicationError,
   DEFAULT_REQUESTED_MODE,
-  ErrorCode,
-  Role,
-  type AuditActor
+  ErrorCode
 } from '@document-parser/shared-kernel';
-import { randomUUID } from 'crypto';
 import type { Request, Response } from 'express';
 import { GetJobStatusUseCase } from '../../../application/use-cases/get-job-status.use-case';
 import { GetProcessingResultUseCase } from '../../../application/use-cases/get-processing-result.use-case';
 import { ReprocessDocumentUseCase } from '../../../application/use-cases/reprocess-document.use-case';
 import { SubmitDocumentUseCase } from '../../../application/use-cases/submit-document.use-case';
 import type { HttpErrorResponse } from '../../../contracts/http';
+import { resolveHttpRequestContext } from './request-context';
 
 type UploadedMultipartFile = {
   originalname: string;
@@ -51,7 +49,7 @@ export class DocumentJobsController {
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response
   ) {
-    const { actor, traceId } = this.resolveRequestContext(request, response);
+    const { actor, traceId } = resolveHttpRequestContext(request, response);
 
     if (file === undefined) {
       throw new HttpException(this.buildErrorResponse(ErrorCode.VALIDATION_ERROR, 'file is required'), 400);
@@ -83,7 +81,7 @@ export class DocumentJobsController {
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response
   ) {
-    const { actor, traceId } = this.resolveRequestContext(request, response);
+    const { actor, traceId } = resolveHttpRequestContext(request, response);
 
     try {
       return await this.getJobStatusUseCase.execute({ jobId }, actor, traceId);
@@ -98,7 +96,7 @@ export class DocumentJobsController {
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response
   ) {
-    const { actor, traceId } = this.resolveRequestContext(request, response);
+    const { actor, traceId } = resolveHttpRequestContext(request, response);
 
     try {
       return await this.getProcessingResultUseCase.execute({ jobId }, actor, traceId);
@@ -114,7 +112,7 @@ export class DocumentJobsController {
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response
   ) {
-    const { actor, traceId } = this.resolveRequestContext(request, response);
+    const { actor, traceId } = resolveHttpRequestContext(request, response);
 
     try {
       return await this.reprocessDocumentUseCase.execute(
@@ -128,25 +126,6 @@ export class DocumentJobsController {
     } catch (error) {
       throw this.toHttpException(error);
     }
-  }
-
-  private resolveRequestContext(
-    request: Request,
-    response: Response
-  ): { actor: AuditActor; traceId: string } {
-    const traceId = request.header('x-trace-id') ?? randomUUID();
-    response.setHeader('x-trace-id', traceId);
-    return {
-      actor: this.resolveActor(request),
-      traceId
-    };
-  }
-
-  private resolveActor(request: Request): AuditActor {
-    const actorId = request.header('x-actor-id') ?? 'local-owner';
-    const rawRole = request.header('x-role');
-    const role = rawRole === Role.OPERATOR ? Role.OPERATOR : Role.OWNER;
-    return { actorId, role };
   }
 
   private toHttpException(error: unknown): HttpException {

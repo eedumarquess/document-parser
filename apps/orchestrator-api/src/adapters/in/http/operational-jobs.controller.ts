@@ -7,17 +7,12 @@ import {
   Req,
   Res
 } from '@nestjs/common';
-import {
-  ApplicationError,
-  ErrorCode,
-  Role,
-  type AuditActor
-} from '@document-parser/shared-kernel';
-import { randomUUID } from 'crypto';
+import { ApplicationError, ErrorCode } from '@document-parser/shared-kernel';
 import type { Request, Response } from 'express';
 import { GetJobOperationalContextUseCase } from '../../../application/use-cases/get-job-operational-context.use-case';
 import type { HttpErrorResponse } from '../../../contracts/http';
 import { renderJobOperationalPanel } from './job-operational-panel.view';
+import { resolveHttpRequestContext } from './request-context';
 
 @Controller()
 export class OperationalJobsController {
@@ -31,7 +26,7 @@ export class OperationalJobsController {
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response
   ) {
-    const { actor, traceId } = this.resolveRequestContext(request, response);
+    const { actor, traceId } = resolveHttpRequestContext(request, response);
 
     try {
       return await this.getJobOperationalContextUseCase.execute({ jobId }, actor, traceId);
@@ -46,7 +41,7 @@ export class OperationalJobsController {
     @Req() request: Request,
     @Res() response: Response
   ) {
-    const { actor, traceId } = this.resolveRequestContext(request, response);
+    const { actor, traceId } = resolveHttpRequestContext(request, response);
 
     try {
       const context = await this.getJobOperationalContextUseCase.execute({ jobId }, actor, traceId);
@@ -55,25 +50,6 @@ export class OperationalJobsController {
     } catch (error) {
       throw this.toHttpException(error);
     }
-  }
-
-  private resolveRequestContext(
-    request: Request,
-    response: Response
-  ): { actor: AuditActor; traceId: string } {
-    const traceId = request.header('x-trace-id') ?? randomUUID();
-    response.setHeader('x-trace-id', traceId);
-    return {
-      actor: this.resolveActor(request),
-      traceId
-    };
-  }
-
-  private resolveActor(request: Request): AuditActor {
-    const actorId = request.header('x-actor-id') ?? 'local-owner';
-    const rawRole = request.header('x-role');
-    const role = rawRole === Role.OPERATOR ? Role.OPERATOR : Role.OWNER;
-    return { actorId, role };
   }
 
   private toHttpException(error: unknown): HttpException {
