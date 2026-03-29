@@ -1,6 +1,7 @@
 import {
   createDeduplicatedJob,
   createReprocessingJob,
+  markJobAsPublishPending,
   createSubmissionJob,
   markJobAsQueued,
   markJobAsStored,
@@ -18,7 +19,7 @@ describe('Processing job lifecycle', () => {
   const actor = buildActor();
   const now = new Date('2026-03-25T12:00:00.000Z');
 
-  it('walks the standard lifecycle from RECEIVED to QUEUED', () => {
+  it('walks the standard lifecycle from RECEIVED to QUEUED through PUBLISH_PENDING', () => {
     const received = createSubmissionJob({
       jobId: 'job-1',
       documentId: 'doc-1',
@@ -33,13 +34,15 @@ describe('Processing job lifecycle', () => {
 
     const validated = markJobAsValidated({ job: received, now });
     const stored = markJobAsStored({ job: validated, now });
-    const queued = markJobAsQueued({ job: stored, now });
+    const publishPending = markJobAsPublishPending({ job: stored, now });
+    const queued = markJobAsQueued({ job: publishPending, now });
 
     expect(queued.status).toBe(JobStatus.QUEUED);
     expect(queued.ingestionTransitions.map((transition) => transition.status)).toEqual([
       JobStatus.RECEIVED,
       JobStatus.VALIDATED,
       JobStatus.STORED,
+      JobStatus.PUBLISH_PENDING,
       JobStatus.QUEUED
     ]);
   });
@@ -115,5 +118,29 @@ describe('Processing job lifecycle', () => {
     });
 
     expect(() => markJobAsQueued({ job: received, now })).toThrow('Cannot mark job as queued');
+  });
+
+  it('marks a stored job as PUBLISH_PENDING before queue publication', () => {
+    const received = createSubmissionJob({
+      jobId: 'job-2',
+      documentId: 'doc-2',
+      requestedMode: 'STANDARD',
+      queueName: DEFAULT_PROCESSING_QUEUE_NAME,
+      pipelineVersion: DEFAULT_PIPELINE_VERSION,
+      outputVersion: DEFAULT_OUTPUT_VERSION,
+      requestedBy: actor,
+      forceReprocess: false,
+      now
+    });
+
+    const publishPending = markJobAsPublishPending({
+      job: markJobAsStored({
+        job: markJobAsValidated({ job: received, now }),
+        now
+      }),
+      now
+    });
+
+    expect(publishPending.status).toBe(JobStatus.PUBLISH_PENDING);
   });
 });
