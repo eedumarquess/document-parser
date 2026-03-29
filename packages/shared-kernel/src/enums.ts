@@ -50,5 +50,6 @@ export enum ArtifactType {
 
 export enum QueuePublicationOutboxStatus {
   PENDING = 'PENDING',
-  PUBLISHED = 'PUBLISHED'
+  PUBLISHED = 'PUBLISHED',
+  FAILED = 'FAILED'
 }

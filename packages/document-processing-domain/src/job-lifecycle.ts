@@ -248,13 +248,18 @@ export function recordJobError(input: {
   now: Date;
   status?: JobStatus;
 }): ProcessingJobRecord {
+  const nextStatus = input.status ?? input.job.status;
+
   return {
     ...input.job,
-    status: input.status ?? input.job.status,
+    status: nextStatus,
     errorCode: input.errorCode,
     errorMessage: input.errorMessage,
-    finishedAt:
-      input.status === JobStatus.FAILED || input.job.status === JobStatus.FAILED ? input.now : input.job.finishedAt,
+    finishedAt: nextStatus === JobStatus.FAILED ? input.now : input.job.finishedAt,
+    ingestionTransitions:
+      nextStatus === JobStatus.FAILED
+        ? appendTransition(input.job.ingestionTransitions, JobStatus.FAILED, input.now)
+        : input.job.ingestionTransitions,
     updatedAt: input.now
   };
 }
@@ -292,6 +297,23 @@ export function finalizeAttemptQueuePublication(input: { attempt: JobAttemptReco
   }
 
   return input.attempt;
+}
+
+export function failAttemptQueuePublication(input: {
+  attempt: JobAttemptRecord;
+  errorCode: ErrorCode.TRANSIENT_FAILURE | ErrorCode.FATAL_FAILURE | ErrorCode.TIMEOUT;
+  errorDetails: Record<string, unknown>;
+  now: Date;
+}): JobAttemptRecord {
+  ensureAttemptStatus(input.attempt, [AttemptStatus.PENDING, AttemptStatus.QUEUED], 'fail attempt queue publication');
+
+  return {
+    ...input.attempt,
+    status: input.errorCode === ErrorCode.TIMEOUT ? AttemptStatus.TIMED_OUT : AttemptStatus.FAILED,
+    finishedAt: input.now,
+    errorCode: input.errorCode,
+    errorDetails: input.errorDetails
+  };
 }
 
 export function startPendingAttempt(input: {
