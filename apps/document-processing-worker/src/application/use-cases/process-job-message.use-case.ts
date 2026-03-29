@@ -4,7 +4,10 @@ import type { ClockPort, LoggingPort, MetricsPort, TracingPort } from '../../con
 import { TOKENS } from '../../contracts/tokens';
 import type { ProcessJobMessageCommand } from '../commands/process-job-message.command';
 import type { ProcessingMessageContext } from '../services/processing-execution-context';
-import { AttemptExecutionCoordinator } from '../services/attempt-execution-coordinator.service';
+import {
+  AttemptExecutionCoordinator,
+  DuplicateProcessingMessageIgnoredError
+} from '../services/attempt-execution-coordinator.service';
 import {
   ProcessingContextIntegrityError,
   ProcessingContextLoader
@@ -127,6 +130,36 @@ export class ProcessJobMessageUseCase {
             })
           });
         } catch (error) {
+          if (error instanceof DuplicateProcessingMessageIgnoredError) {
+            await this.metrics.increment({
+              name: 'worker.queue_publication_outbox.duplicate_skipped',
+              traceId: message.traceId,
+              tags: this.buildTags({
+                jobId: error.metadata.jobId,
+                documentId: error.metadata.documentId,
+                attemptId: error.metadata.attemptId,
+                operation: 'process_job_message'
+              })
+            });
+            await this.logging.log({
+              level: 'warn',
+              message: 'Processing message ignored because the job or attempt already advanced',
+              context: 'ProcessJobMessageUseCase',
+              traceId: message.traceId,
+              data: this.redactionPolicy.redact(
+                {
+                  ...error.metadata,
+                  operation: 'process_job_message'
+                },
+                {
+                  context: 'log'
+                }
+              ) as Record<string, unknown>,
+              recordedAt: this.clock.now()
+            });
+            return;
+          }
+
           try {
             const recovery = await this.runStage(
               {
@@ -163,6 +196,15 @@ export class ProcessJobMessageUseCase {
                   }
                 ) as Record<string, unknown>,
                 recordedAt: this.clock.now()
+              });
+              await this.metrics.increment({
+                name: 'worker.queue_publication_outbox.enqueued',
+                traceId: message.traceId,
+                tags: {
+                  ownerService: 'document-processing-worker',
+                  flowType: 'retry',
+                  dispatchKind: 'publish_retry'
+                }
               });
               await this.metrics.increment({
                 name: 'worker.process_job_message.retry_scheduled',

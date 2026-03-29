@@ -4,7 +4,6 @@ import {
   classifyAttemptFailure,
   createPendingAttempt,
   failAttempt,
-  markAttemptAsQueued,
   moveFailedAttemptToDeadLetter,
   recordJobError,
   rescheduleJobForRetry,
@@ -22,8 +21,8 @@ import type {
   DeadLetterRepositoryPort,
   IdGeneratorPort,
   JobAttemptRepositoryPort,
-  JobPublisherPort,
   ProcessingJobRepositoryPort,
+  QueuePublicationOutboxRepositoryPort,
   UnitOfWorkPort
 } from '../../contracts/ports';
 import { TOKENS } from '../../contracts/tokens';
@@ -37,6 +36,7 @@ import {
   ProcessingContextIntegrityError
 } from './processing-context-loader.service';
 import { AuditEventRecorder } from './audit-event-recorder.service';
+import { buildWorkerQueuePublicationOutboxRecord } from './queue-publication-outbox-dispatcher.service';
 
 type RecoveryContext = ProcessingMessageContext | ProcessingExecutionContext;
 
@@ -47,7 +47,8 @@ export class ProcessingFailureRecoveryService {
     @Inject(TOKENS.JOB_REPOSITORY) private readonly jobs: ProcessingJobRepositoryPort,
     @Inject(TOKENS.ATTEMPT_REPOSITORY) private readonly attempts: JobAttemptRepositoryPort,
     @Inject(TOKENS.DEAD_LETTER_REPOSITORY) private readonly deadLetters: DeadLetterRepositoryPort,
-    @Inject(TOKENS.JOB_PUBLISHER) private readonly publisher: JobPublisherPort,
+    @Inject(TOKENS.QUEUE_PUBLICATION_OUTBOX_REPOSITORY)
+    private readonly outbox: QueuePublicationOutboxRepositoryPort,
     @Inject(TOKENS.UNIT_OF_WORK) private readonly unitOfWork: UnitOfWorkPort,
     private readonly retryPolicy: RetryPolicyService,
     private readonly retentionPolicy: RetentionPolicyService,
@@ -95,70 +96,45 @@ export class ProcessingFailureRecoveryService {
         pipelineVersion: context.job.pipelineVersion,
         now: input.now
       });
-      const retryMessage = {
-        ...context.message,
-        attemptId: nextAttempt.attemptId,
-        publishedAt: input.now.toISOString()
-      };
-
-      try {
-        await this.publisher.publishRetry(retryMessage, context.attempt.attemptNumber);
-      } catch (publishError) {
-        await this.persistDeadLetter({
-          traceId: context.message.traceId,
-          job: recordJobError({
-            job: context.job,
-            errorCode: ErrorCode.DLQ_ERROR,
-            errorMessage: buildFailureMessage(publishError),
-            now: input.now,
-            status: JobStatus.FAILED
-          }),
-          attempt: {
-            ...nextAttempt,
-            errorCode: ErrorCode.DLQ_ERROR,
-            errorDetails: {
-              message: buildFailureMessage(publishError),
-              retrySourceAttemptId: failedAttempt.attemptId
-            }
-          },
-          reasonCode: ErrorCode.DLQ_ERROR,
-          reasonMessage: buildFailureMessage(publishError),
-          payloadSnapshot: {
-            jobId: context.job.jobId,
-            attemptId: nextAttempt.attemptId,
-            documentId: context.job.documentId
-          },
-          previousAttempts: [failedAttempt],
-          now: input.now
-        });
-        throw toError(publishError);
-      }
 
       const queuedJob = rescheduleJobForRetry({
         job: context.job,
         now: input.now
       });
-      const queuedAttempt = markAttemptAsQueued({
-        attempt: nextAttempt
-      });
 
       await this.unitOfWork.runInTransaction(async () => {
         await this.attempts.save(failedAttempt);
-        await this.attempts.save(queuedAttempt);
+        await this.attempts.save(nextAttempt);
         await this.jobs.save(queuedJob);
-        await this.auditEventRecorder.record({
-          eventType: 'PROCESSING_RETRY_SCHEDULED',
-          aggregateType: 'JOB_ATTEMPT',
-          aggregateId: queuedAttempt.attemptId,
-          traceId: context.message.traceId,
-          metadata: {
-            jobId: context.job.jobId,
-            failedAttemptId: context.attempt.attemptId,
-            nextAttemptId: nextAttempt.attemptId,
-            retryDelayMs: decision.delayMs
-          },
-          createdAt: input.now
-        });
+        await this.outbox.save(
+          buildWorkerQueuePublicationOutboxRecord({
+            outboxId: this.idGenerator.next('outbox'),
+            flowType: 'retry',
+            dispatchKind: 'publish_retry',
+            retryAttempt: context.attempt.attemptNumber,
+            queueName: context.job.queueName,
+            messageBase: {
+              documentId: context.job.documentId,
+              jobId: context.job.jobId,
+              attemptId: nextAttempt.attemptId,
+              traceId: context.message.traceId,
+              requestedMode: context.message.requestedMode,
+              pipelineVersion: context.message.pipelineVersion
+            },
+            finalizationMetadata: {
+              auditEventType: 'PROCESSING_RETRY_SCHEDULED',
+              auditAggregateType: 'JOB_ATTEMPT',
+              auditAggregateId: nextAttempt.attemptId,
+              auditMetadata: {
+                jobId: context.job.jobId,
+                failedAttemptId: context.attempt.attemptId,
+                nextAttemptId: nextAttempt.attemptId,
+                retryDelayMs: decision.delayMs
+              }
+            },
+            now: input.now
+          })
+        );
       });
 
       return 'retry_scheduled';

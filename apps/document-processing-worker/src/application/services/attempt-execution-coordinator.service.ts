@@ -1,6 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { startPendingAttempt } from '@document-parser/document-processing-domain';
-import type { ProcessingOutcome } from '@document-parser/shared-kernel';
+import {
+  AttemptStatus,
+  JobStatus,
+  type ProcessingOutcome
+} from '@document-parser/shared-kernel';
 import type {
   BinaryStoragePort,
   ExtractionPipelinePort,
@@ -14,6 +18,21 @@ import type {
   ProcessingMessageContext
 } from './processing-execution-context';
 
+export class DuplicateProcessingMessageIgnoredError extends Error {
+  public constructor(
+    public readonly metadata: {
+      jobId: string;
+      attemptId: string;
+      documentId: string;
+      jobStatus: JobStatus;
+      attemptStatus: AttemptStatus;
+    }
+  ) {
+    super('Processing message was ignored because the target job/attempt already advanced');
+    this.name = 'DuplicateProcessingMessageIgnoredError';
+  }
+}
+
 @Injectable()
 export class AttemptExecutionCoordinator {
   public constructor(
@@ -25,6 +44,19 @@ export class AttemptExecutionCoordinator {
   ) {}
 
   public async start(input: ProcessingMessageContext, now: Date): Promise<ProcessingMessageContext> {
+    if (
+      ![JobStatus.PUBLISH_PENDING, JobStatus.QUEUED].includes(input.job.status) ||
+      ![AttemptStatus.PENDING, AttemptStatus.QUEUED].includes(input.attempt.status)
+    ) {
+      throw new DuplicateProcessingMessageIgnoredError({
+        jobId: input.job.jobId,
+        attemptId: input.attempt.attemptId,
+        documentId: input.document.documentId,
+        jobStatus: input.job.status,
+        attemptStatus: input.attempt.status
+      });
+    }
+
     const started = startPendingAttempt({
       job: input.job,
       attempt: input.attempt,
@@ -32,8 +64,36 @@ export class AttemptExecutionCoordinator {
     });
 
     await this.unitOfWork.runInTransaction(async () => {
-      await this.jobs.save(started.job);
-      await this.attempts.save(started.attempt);
+      const jobUpdated = await this.jobs.updateIfCurrentStatus({
+        jobId: input.job.jobId,
+        currentStatuses: [JobStatus.PUBLISH_PENDING, JobStatus.QUEUED],
+        job: started.job
+      });
+      if (!jobUpdated) {
+        throw new DuplicateProcessingMessageIgnoredError({
+          jobId: input.job.jobId,
+          attemptId: input.attempt.attemptId,
+          documentId: input.document.documentId,
+          jobStatus: input.job.status,
+          attemptStatus: input.attempt.status
+        });
+      }
+
+      const attemptUpdated = await this.attempts.updateIfCurrentStatus({
+        attemptId: input.attempt.attemptId,
+        currentStatuses: [AttemptStatus.PENDING, AttemptStatus.QUEUED],
+        attempt: started.attempt
+      });
+      if (!attemptUpdated) {
+        await this.jobs.save(input.job);
+        throw new DuplicateProcessingMessageIgnoredError({
+          jobId: input.job.jobId,
+          attemptId: input.attempt.attemptId,
+          documentId: input.document.documentId,
+          jobStatus: input.job.status,
+          attemptStatus: input.attempt.status
+        });
+      }
     });
 
     return {
