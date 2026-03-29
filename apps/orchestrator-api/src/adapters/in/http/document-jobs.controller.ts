@@ -15,7 +15,8 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApplicationError,
   DEFAULT_REQUESTED_MODE,
-  ErrorCode
+  ErrorCode,
+  JobStatus
 } from '@document-parser/shared-kernel';
 import type { Request, Response } from 'express';
 import { GetJobStatusUseCase } from '../../../application/use-cases/get-job-status.use-case';
@@ -56,7 +57,7 @@ export class DocumentJobsController {
     }
 
     try {
-      return await this.submitDocumentUseCase.execute(
+      const result = await this.submitDocumentUseCase.execute(
         {
           file: {
             originalName: file.originalname,
@@ -70,6 +71,8 @@ export class DocumentJobsController {
         actor,
         traceId
       );
+      this.applyAcceptedStatus(response, result.status);
+      return result;
     } catch (error) {
       throw this.toHttpException(error);
     }
@@ -115,7 +118,7 @@ export class DocumentJobsController {
     const { actor, traceId } = resolveHttpRequestContext(request, response);
 
     try {
-      return await this.reprocessDocumentUseCase.execute(
+      const result = await this.reprocessDocumentUseCase.execute(
         {
           jobId,
           reason: body.reason ?? ''
@@ -123,9 +126,15 @@ export class DocumentJobsController {
         actor,
         traceId
       );
+      this.applyAcceptedStatus(response, result.status);
+      return result;
     } catch (error) {
       throw this.toHttpException(error);
     }
+  }
+
+  private applyAcceptedStatus(response: Response, status: JobStatus): void {
+    response.status(status === JobStatus.PUBLISH_PENDING ? HttpStatus.ACCEPTED : HttpStatus.CREATED);
   }
 
   private toHttpException(error: unknown): HttpException {

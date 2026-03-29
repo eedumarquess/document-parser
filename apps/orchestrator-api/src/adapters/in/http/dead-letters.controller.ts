@@ -8,7 +8,7 @@ import {
   Req,
   Res
 } from '@nestjs/common';
-import { ApplicationError, ErrorCode } from '@document-parser/shared-kernel';
+import { ApplicationError, ErrorCode, JobStatus } from '@document-parser/shared-kernel';
 import type { Request, Response } from 'express';
 import { ReplayDeadLetterUseCase } from '../../../application/use-cases/replay-dead-letter.use-case';
 import type { HttpErrorResponse } from '../../../contracts/http';
@@ -28,7 +28,7 @@ export class DeadLettersController {
     const { actor, traceId } = resolveHttpRequestContext(request, response);
 
     try {
-      return await this.replayDeadLetterUseCase.execute(
+      const result = await this.replayDeadLetterUseCase.execute(
         {
           dlqEventId,
           reason: body.reason ?? ''
@@ -36,6 +36,8 @@ export class DeadLettersController {
         actor,
         traceId
       );
+      response.status(result.status === JobStatus.PUBLISH_PENDING ? HttpStatus.ACCEPTED : HttpStatus.CREATED);
+      return result;
     } catch (error) {
       throw this.toHttpException(error);
     }

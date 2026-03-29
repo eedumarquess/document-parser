@@ -76,66 +76,45 @@ export class ReplayDeadLetterUseCase {
             queueName: originalJob.queueName,
             traceId,
             now,
-            onQueued: async ({ queuedJob, queuedAttempt }) => {
-              await this.deadLetters.save({
-                ...deadLetter,
-                replayedAt: now
-              });
-              await this.auditEventRecorder.record({
-                eventType: 'PROCESSING_JOB_QUEUED',
-                aggregateType: 'PROCESSING_JOB',
-                aggregateId: queuedJob.jobId,
-                traceId,
-                actor,
-                metadata: {
-                  jobId: queuedJob.jobId,
-                  attemptId: queuedAttempt.attemptId,
-                  reprocessOfJobId: originalJob.jobId
-                },
-                createdAt: now
-              });
+            onStored: async ({ job }) => {
               await this.auditEventRecorder.record({
                 eventType: 'DEAD_LETTER_REPLAY_REQUESTED',
                 aggregateType: 'PROCESSING_JOB',
-                aggregateId: queuedJob.jobId,
+                aggregateId: job.jobId,
                 traceId,
                 actor,
                 metadata: {
                   dlqEventId: deadLetter.dlqEventId,
-                  jobId: queuedJob.jobId,
+                  jobId: job.jobId,
                   sourceJobId: originalJob.jobId,
                   reason: command.reason
                 },
                 createdAt: now
               });
             },
-            publishFailure: {
-              eventType: 'DEAD_LETTER_REPLAY_FAILED',
-              failureMessage: 'Replay job persisted but queue publication failed',
-              context: ({ job }) => ({
-                dlqEventId: deadLetter.dlqEventId,
-                jobId: job.jobId
-              }),
-              metadata: ({ job, errorMessage }) => ({
-                dlqEventId: deadLetter.dlqEventId,
-                jobId: job.jobId,
-                errorMessage
-              })
+            queuedFinalizationMetadata: {
+              actor,
+              auditEventType: 'PROCESSING_JOB_QUEUED',
+              auditMetadata: {
+                reprocessOfJobId: originalJob.jobId
+              },
+              replayDeadLetterId: deadLetter.dlqEventId
             }
           });
 
           await this.logging.log({
             level: 'info',
-            message: 'Dead letter replay queued successfully',
+            message: 'Dead letter replay accepted for asynchronous queue publication',
             context: 'ReplayDeadLetterUseCase',
             traceId,
             data: this.redactionPolicy.redact(
               {
                 dlqEventId: deadLetter.dlqEventId,
-                jobId: derived.queuedJob.jobId,
-                documentId: derived.queuedJob.documentId,
+                jobId: derived.job.jobId,
+                documentId: derived.job.documentId,
                 sourceJobId: originalJob.jobId,
-                operation: 'replay_dead_letter'
+                operation: 'replay_dead_letter',
+                status: derived.job.status
               },
               {
                 context: 'log'
@@ -144,17 +123,26 @@ export class ReplayDeadLetterUseCase {
             recordedAt: now
           });
           await this.metrics.increment({
-            name: 'orchestrator.dead_letter_replay.succeeded',
+            name: 'orchestrator.queue_publication_outbox.enqueued',
             traceId,
             tags: {
-              jobId: derived.queuedJob.jobId,
-              documentId: derived.queuedJob.documentId,
+              ownerService: 'orchestrator-api',
+              flowType: 'replay',
+              dispatchKind: 'publish_requested'
+            }
+          });
+          await this.metrics.increment({
+            name: 'orchestrator.dead_letter_replay.accepted',
+            traceId,
+            tags: {
+              jobId: derived.job.jobId,
+              documentId: derived.job.documentId,
               attemptId: deadLetter.attemptId,
               operation: 'replay_dead_letter'
             }
           });
 
-          return toJobResponse(derived.queuedJob);
+          return toJobResponse(derived.job);
         } catch (error) {
           await this.metrics.increment({
             name: 'orchestrator.dead_letter_replay.failed',
