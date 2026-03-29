@@ -1,0 +1,42 @@
+services:
+  api-dev:
+    build:
+      context: .
+      target: dev
+    working_dir: /workspace/document-parser
+    command: ["pnpm", "run", "docker:dev:api"]
+    env_file:
+      - .env.docker.dev
+    environment:
+      NODE_ENV: development
+      ORCHESTRATOR_RUNTIME_MODE: real
+    ports:
+      - "3000:3000"
+    volumes:
+      - ..:/workspace
+      - document-parser-node-modules:/workspace/document-parser/node_modules
+      - document-parser-pnpm-store:/pnpm/store
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  worker-dev:
+    build:
+      context: .
+      target: dev
+    working_dir: /workspace/document-parser
+    command: ["pnpm", "run", "docker:dev:worker"]
+    env_file:
+      - .env.docker.dev
+    environment:
+      NODE_ENV: development
+      WORKER_RUNTIME_MODE: real
+    volumes:
+      - ..:/workspace
+      - document-parser-node-modules:/workspace/document-parser/node_modules
+      - document-parser-pnpm-store:/pnpm/store
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  document-parser-node-modules:
+  document-parser-pnpm-store:
