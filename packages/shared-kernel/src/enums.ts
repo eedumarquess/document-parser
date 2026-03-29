@@ -2,6 +2,7 @@ export enum JobStatus {
   RECEIVED = 'RECEIVED',
   VALIDATED = 'VALIDATED',
   STORED = 'STORED',
+  PUBLISH_PENDING = 'PUBLISH_PENDING',
   DEDUPLICATED = 'DEDUPLICATED',
   REPROCESSED = 'REPROCESSED',
   QUEUED = 'QUEUED',
@@ -45,4 +46,9 @@ export enum ArtifactType {
   MASKED_TEXT = 'MASKED_TEXT',
   LLM_PROMPT = 'LLM_PROMPT',
   LLM_RESPONSE = 'LLM_RESPONSE'
+}
+
+export enum QueuePublicationOutboxStatus {
+  PENDING = 'PENDING',
+  PUBLISHED = 'PUBLISHED'
 }

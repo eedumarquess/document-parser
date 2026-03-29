@@ -23,6 +23,10 @@ export class RetentionPolicyService {
     return addDays(now, 90);
   }
 
+  public calculateQueuePublicationOutboxRetentionUntil(now: Date): Date {
+    return addDays(now, 7);
+  }
+
   public calculatePageArtifactRetentionUntil(input: { artifactType: ArtifactType; now: Date }): Date {
     if (input.artifactType === ArtifactType.OCR_JSON) {
       return addDays(input.now, 90);

@@ -1,4 +1,4 @@
-import type { AttemptStatus, JobStatus, Role } from './enums';
+import type { AttemptStatus, JobStatus, QueuePublicationOutboxStatus, Role } from './enums';
 import type { ExtractionWarning, FallbackReason } from './constants';
 
 export type VersionStamp = {
@@ -22,6 +22,36 @@ export type ProcessingJobRequestedMessage = {
   requestedMode: string;
   pipelineVersion: string;
   publishedAt: string;
+};
+
+export type QueuePublicationMessageBase = Omit<ProcessingJobRequestedMessage, 'publishedAt'>;
+
+export type QueuePublicationFlowType = 'submission' | 'reprocess' | 'replay' | 'retry';
+
+export type QueuePublicationDispatchKind = 'publish_requested' | 'publish_retry';
+
+export type QueuePublicationOutboxRecord = {
+  outboxId: string;
+  ownerService: string;
+  flowType: QueuePublicationFlowType;
+  dispatchKind: QueuePublicationDispatchKind;
+  retryAttempt?: number;
+  jobId: string;
+  documentId: string;
+  attemptId: string;
+  queueName: string;
+  messageBase: QueuePublicationMessageBase;
+  finalizationMetadata?: Record<string, unknown>;
+  status: QueuePublicationOutboxStatus;
+  publishAttempts: number;
+  availableAt: Date;
+  leaseOwner?: string;
+  leaseExpiresAt?: Date;
+  lastError?: string;
+  publishedAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+  retentionUntil?: Date;
 };
 
 export type JobWarning = ExtractionWarning;
