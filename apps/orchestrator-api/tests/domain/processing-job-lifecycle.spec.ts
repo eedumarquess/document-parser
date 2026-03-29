@@ -1,16 +1,20 @@
 import {
   createDeduplicatedJob,
   createReprocessingJob,
+  createPendingAttempt,
+  failAttemptQueuePublication,
   markJobAsPublishPending,
   createSubmissionJob,
   markJobAsQueued,
   markJobAsStored,
-  markJobAsValidated
+  markJobAsValidated,
+  recordJobError
 } from '@document-parser/document-processing-domain';
 import {
   DEFAULT_OUTPUT_VERSION,
   DEFAULT_PIPELINE_VERSION,
   DEFAULT_PROCESSING_QUEUE_NAME,
+  ErrorCode,
   JobStatus
 } from '@document-parser/shared-kernel';
 import { buildActor } from '@document-parser/testkit';
@@ -142,5 +146,73 @@ describe('Processing job lifecycle', () => {
     });
 
     expect(publishPending.status).toBe(JobStatus.PUBLISH_PENDING);
+  });
+
+  it('records a terminal queue publication error as FAILED and appends the transition', () => {
+    const publishPending = markJobAsPublishPending({
+      job: markJobAsStored({
+        job: markJobAsValidated({
+          job: createSubmissionJob({
+            jobId: 'job-3',
+            documentId: 'doc-3',
+            requestedMode: 'STANDARD',
+            queueName: DEFAULT_PROCESSING_QUEUE_NAME,
+            pipelineVersion: DEFAULT_PIPELINE_VERSION,
+            outputVersion: DEFAULT_OUTPUT_VERSION,
+            requestedBy: actor,
+            forceReprocess: false,
+            now
+          }),
+          now
+        }),
+        now
+      }),
+      now
+    });
+
+    const failed = recordJobError({
+      job: publishPending,
+      errorCode: ErrorCode.TRANSIENT_FAILURE,
+      errorMessage: 'publisher offline',
+      now,
+      status: JobStatus.FAILED
+    });
+
+    expect(failed.status).toBe(JobStatus.FAILED);
+    expect(failed.finishedAt).toEqual(now);
+    expect(failed.errorCode).toBe(ErrorCode.TRANSIENT_FAILURE);
+    expect(failed.ingestionTransitions.map((transition) => transition.status)).toEqual([
+      JobStatus.RECEIVED,
+      JobStatus.VALIDATED,
+      JobStatus.STORED,
+      JobStatus.PUBLISH_PENDING,
+      JobStatus.FAILED
+    ]);
+  });
+
+  it('fails a pending attempt when queue publication terminates before worker execution', () => {
+    const attempt = createPendingAttempt({
+      attemptId: 'attempt-queue-failure',
+      jobId: 'job-queue-failure',
+      attemptNumber: 1,
+      pipelineVersion: DEFAULT_PIPELINE_VERSION,
+      now
+    });
+
+    const failedAttempt = failAttemptQueuePublication({
+      attempt,
+      errorCode: ErrorCode.TRANSIENT_FAILURE,
+      errorDetails: {
+        message: 'publisher offline'
+      },
+      now
+    });
+
+    expect(failedAttempt.status).toBe('FAILED');
+    expect(failedAttempt.errorCode).toBe(ErrorCode.TRANSIENT_FAILURE);
+    expect(failedAttempt.errorDetails).toEqual({
+      message: 'publisher offline'
+    });
+    expect(failedAttempt.finishedAt).toEqual(now);
   });
 });

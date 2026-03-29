@@ -271,6 +271,42 @@ describe('GetJobStatusUseCase', () => {
     expectNoTemplateFields(response);
   });
 
+  it('returns FAILED when the job terminated before queue publication completed', async () => {
+    const context = createResultDeliveryContext();
+    const job = buildJobRecord({
+      jobId: 'job-queue-failed',
+      documentId: 'doc-queue-failed',
+      status: JobStatus.FAILED,
+      errorCode: 'TRANSIENT_FAILURE',
+      errorMessage: 'publisher offline',
+      finishedAt: new Date('2026-03-25T12:01:00.000Z'),
+      ingestionTransitions: [
+        { status: JobStatus.RECEIVED, at: new Date('2026-03-25T12:00:00.000Z') },
+        { status: JobStatus.PUBLISH_PENDING, at: new Date('2026-03-25T12:00:30.000Z') },
+        { status: JobStatus.FAILED, at: new Date('2026-03-25T12:01:00.000Z') }
+      ]
+    });
+    await context.jobs.save(job);
+
+    const response = await context.getJobStatus.execute(
+      { jobId: job.jobId },
+      buildActor({ role: Role.OPERATOR }),
+      'trace-status-failed-queue-publication'
+    );
+
+    expect(response).toEqual({
+      jobId: 'job-queue-failed',
+      documentId: 'doc-queue-failed',
+      status: JobStatus.FAILED,
+      requestedMode: 'STANDARD',
+      pipelineVersion: DEFAULT_PIPELINE_VERSION,
+      outputVersion: DEFAULT_OUTPUT_VERSION,
+      reusedResult: false,
+      createdAt: baseDate.toISOString()
+    });
+    expectNoTemplateFields(response);
+  });
+
   it('returns NOT_FOUND when the job does not exist', async () => {
     const context = createResultDeliveryContext();
     const promise = context.getJobStatus.execute({ jobId: 'missing-job' }, buildActor(), 'trace-status-missing');
@@ -715,6 +751,121 @@ describe('GetJobOperationalContextUseCase', () => {
         expect.objectContaining({
           source: 'dead_letter',
           title: 'DLQ FATAL_FAILURE'
+        })
+      ])
+    );
+  });
+
+  it('surfaces terminal queue-publication failures in the operational context', async () => {
+    const context = createOperationalContext();
+    const job = buildJobRecord({
+      jobId: 'job-ops-queue-failed',
+      documentId: 'doc-ops-queue-failed',
+      status: JobStatus.FAILED,
+      errorCode: 'TRANSIENT_FAILURE',
+      errorMessage: 'publisher offline',
+      finishedAt: new Date('2026-03-25T12:01:00.000Z'),
+      ingestionTransitions: [
+        { status: JobStatus.RECEIVED, at: new Date('2026-03-25T12:00:00.000Z') },
+        { status: JobStatus.PUBLISH_PENDING, at: new Date('2026-03-25T12:00:30.000Z') },
+        { status: JobStatus.FAILED, at: new Date('2026-03-25T12:01:00.000Z') }
+      ]
+    });
+    await context.jobs.save(job);
+    await context.attempts.save({
+      attemptId: 'attempt-ops-queue-failed',
+      jobId: job.jobId,
+      attemptNumber: 1,
+      pipelineVersion: DEFAULT_PIPELINE_VERSION,
+      status: AttemptStatus.FAILED,
+      fallbackUsed: false,
+      errorCode: 'TRANSIENT_FAILURE',
+      errorDetails: {
+        message: 'publisher offline'
+      },
+      finishedAt: new Date('2026-03-25T12:01:00.000Z'),
+      createdAt: new Date('2026-03-25T12:00:30.000Z')
+    });
+    await context.outbox.save({
+      outboxId: 'outbox-ops-queue-failed',
+      ownerService: 'orchestrator-api',
+      flowType: 'submission',
+      dispatchKind: 'publish_requested',
+      jobId: job.jobId,
+      documentId: job.documentId,
+      attemptId: 'attempt-ops-queue-failed',
+      queueName: job.queueName,
+      messageBase: {
+        documentId: job.documentId,
+        jobId: job.jobId,
+        attemptId: 'attempt-ops-queue-failed',
+        traceId: 'trace-ops-queue-failed',
+        requestedMode: job.requestedMode,
+        pipelineVersion: job.pipelineVersion
+      },
+      finalizationMetadata: {
+        auditEventType: 'PROCESSING_JOB_QUEUED'
+      },
+      status: QueuePublicationOutboxStatus.FAILED,
+      publishAttempts: 1,
+      availableAt: new Date('2026-03-25T12:00:30.000Z'),
+      lastError: 'publisher offline',
+      createdAt: new Date('2026-03-25T12:00:30.000Z'),
+      updatedAt: new Date('2026-03-25T12:01:00.000Z'),
+      retentionUntil: new Date('2026-04-01T12:01:00.000Z')
+    });
+    await context.audit.record({
+      eventId: 'audit-ops-queue-failed',
+      eventType: 'PROCESSING_JOB_QUEUEING_FAILED',
+      aggregateType: 'PROCESSING_JOB',
+      aggregateId: job.jobId,
+      traceId: 'trace-ops-queue-failed',
+      actor: buildActor(),
+      metadata: {
+        jobId: job.jobId,
+        attemptId: 'attempt-ops-queue-failed',
+        outboxId: 'outbox-ops-queue-failed',
+        errorCode: 'TRANSIENT_FAILURE'
+      },
+      redactedPayload: {
+        jobId: job.jobId
+      },
+      createdAt: new Date('2026-03-25T12:01:00.000Z'),
+      retentionUntil: new Date('2026-09-21T12:00:00.000Z')
+    });
+
+    const response = await context.useCase.execute(
+      { jobId: job.jobId },
+      buildActor({ role: Role.OPERATOR }),
+      'trace-ops-queue-failed-query'
+    );
+
+    expect(response.summary).toMatchObject({
+      jobId: job.jobId,
+      documentId: job.documentId,
+      status: JobStatus.FAILED,
+      errorCode: 'TRANSIENT_FAILURE',
+      errorMessage: 'publisher offline'
+    });
+    expect(response.queuePublication).toMatchObject({
+      outboxId: 'outbox-ops-queue-failed',
+      status: QueuePublicationOutboxStatus.FAILED,
+      publishAttempts: 1,
+      lastError: 'publisher offline'
+    });
+    expect(response.timeline).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: 'job',
+          title: `Job ${JobStatus.FAILED}`
+        }),
+        expect.objectContaining({
+          source: 'outbox',
+          title: `Queue publication ${QueuePublicationOutboxStatus.FAILED}`
+        }),
+        expect.objectContaining({
+          source: 'audit',
+          title: 'PROCESSING_JOB_QUEUEING_FAILED'
         })
       ])
     );

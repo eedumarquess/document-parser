@@ -7,7 +7,8 @@ import {
   DEFAULT_PIPELINE_VERSION,
   ExtractionWarning,
   JobStatus,
-  Role
+  Role,
+  type ProcessingJobRequestedMessage
 } from '@document-parser/shared-kernel';
 import { FixedClock, IncrementalIdGenerator, createPdfBuffer } from '@document-parser/testkit';
 import { OrchestratorApiModule } from '../../src/app.module';
@@ -23,6 +24,19 @@ import {
   InMemoryTelemetryEventRepository
 } from '../../src/adapters/out/repositories/in-memory.repositories';
 import { InMemoryBinaryStorageAdapter } from '../../src/adapters/out/storage/in-memory-binary-storage.adapter';
+
+class FailingJobPublisherAdapter extends InMemoryJobPublisherAdapter {
+  public override async publishRequested(_message: ProcessingJobRequestedMessage): Promise<void> {
+    throw new Error('publisher offline');
+  }
+
+  public override async publishRetry(
+    _message: ProcessingJobRequestedMessage,
+    _retryAttempt: number
+  ): Promise<void> {
+    throw new Error('publisher offline');
+  }
+}
 
 const expectNoTemplateFields = (payload: Record<string, unknown>) => {
   expect(payload).not.toHaveProperty('templateId');
@@ -41,9 +55,13 @@ describe('Document jobs e2e', () => {
   let telemetry: InMemoryTelemetryEventRepository;
   let lastPublishedTraceId: string | undefined;
 
-  const waitForJobStatus = async (jobId: string, expectedStatus: string) => {
+  const waitForJobStatus = async (
+    jobId: string,
+    expectedStatus: string,
+    appInstance: INestApplication = app
+  ) => {
     for (let attempt = 0; attempt < 80; attempt += 1) {
-      const response = await request(app.getHttpServer())
+      const response = await request(appInstance.getHttpServer())
         .get(`/v1/parsing/jobs/${jobId}`)
         .set('x-role', Role.OWNER);
 
@@ -305,6 +323,82 @@ describe('Document jobs e2e', () => {
         jobId: 'job-missing'
       }
     });
+  });
+
+  it('converges to FAILED when orchestrator queue publication fails', async () => {
+    const clock = new FixedClock();
+    const idGenerator = new IncrementalIdGenerator();
+    const failingAppJobs = new InMemoryProcessingJobRepository();
+    const failingApp = (
+      await Test.createTestingModule({
+        imports: [
+          OrchestratorApiModule.register({
+            clock,
+            idGenerator,
+            storage: new InMemoryBinaryStorageAdapter(),
+            documents: new InMemoryDocumentRepository(),
+            jobs: failingAppJobs,
+            attempts: new InMemoryJobAttemptRepository(),
+            results: new InMemoryProcessingResultRepository(),
+            artifacts: new InMemoryPageArtifactRepository(),
+            deadLetters: new InMemoryDeadLetterRepository(),
+            audit: new InMemoryAuditRepository(),
+            telemetry: new InMemoryTelemetryEventRepository(),
+            publisher: new FailingJobPublisherAdapter(),
+            queuePublicationDispatcherRuntime: {
+              pollIntervalMs: 10,
+              batchSize: 20,
+              leaseMs: 30_000
+            }
+          })
+        ]
+      }).compile()
+    ).createNestApplication();
+
+    await failingApp.init();
+
+    try {
+      const createResponse = await request(failingApp.getHttpServer())
+        .post('/v1/parsing/jobs')
+        .set('x-role', Role.OWNER)
+        .set('x-trace-id', 'trace-e2e-queue-failed')
+        .attach('file', createPdfBuffer(1, 'publisher failure'), {
+          filename: 'queue-failed.pdf',
+          contentType: 'application/pdf'
+        });
+
+      expect(createResponse.status).toBe(202);
+      expect(createResponse.body.status).toBe('PUBLISH_PENDING');
+
+      const statusResponse = await waitForJobStatus(createResponse.body.jobId, 'FAILED', failingApp);
+
+      expect(statusResponse.status).toBe(200);
+      expect(statusResponse.body.status).toBe('FAILED');
+      await expect(failingAppJobs.findById(createResponse.body.jobId)).resolves.toMatchObject({
+        status: JobStatus.FAILED,
+        errorCode: 'TRANSIENT_FAILURE',
+        errorMessage: 'publisher offline'
+      });
+
+      const resultResponse = await request(failingApp.getHttpServer())
+        .get(`/v1/parsing/jobs/${createResponse.body.jobId}/result`)
+        .set('x-role', Role.OPERATOR);
+
+      expect(resultResponse.status).toBe(404);
+
+      const contextResponse = await request(failingApp.getHttpServer())
+        .get(`/v1/ops/jobs/${createResponse.body.jobId}/context`)
+        .set('x-role', Role.OPERATOR);
+
+      expect(contextResponse.status).toBe(200);
+      expect(contextResponse.body.summary.status).toBe('FAILED');
+      expect(contextResponse.body.queuePublication).toMatchObject({
+        status: 'FAILED',
+        lastError: 'publisher offline'
+      });
+    } finally {
+      await failingApp.close();
+    }
   });
 
   it('rejects invalid x-role on submit without creating a job', async () => {
