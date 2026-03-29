@@ -4,6 +4,36 @@ Todas as mudancas relevantes deste repositorio devem ser registradas aqui.
 
 O formato segue uma adaptacao simples de `Keep a Changelog` e usa as tags de contexto dos commits como apoio para rastreabilidade.
 
+## [2026-03-29] - Bootstrap Docker para desenvolvimento e producao
+
+### Added
+
+- `Dockerfile` multi-stage com alvo `dev` para workspace montado e alvo `prod` para imagem final unica reutilizavel por `api` ou `worker`.
+- `docker-compose.dev.yml` para subir `api-dev` e `worker-dev` em runtime `real`, apontando para `MongoDB`, `RabbitMQ` e `MinIO` externos ao compose.
+- Scripts de bootstrap para instalar o monorepo no container, validar `PNPM_LINK_MAP`, instalar libs irmas e aplicar `pnpm link` por workspace consumidor.
+- Exemplos de ambiente `.env.example` e `.env.docker.dev.example` com as variaveis obrigatorias de runtime real e opcoes de LLM remoto.
+
+### Changed
+
+- O repositorio passou a expor scripts `docker:dev:bootstrap`, `docker:dev:api` e `docker:dev:worker` no `package.json`.
+- O README agora documenta bootstrap sem Docker, fluxo Docker de desenvolvimento com infra externa e build/runtime da imagem de producao.
+- O versionamento ignorado passou a preservar `.env.docker.dev.example` junto de `.env.example`.
+
+### Technical Notes
+
+- O compose de desenvolvimento monta `..:/workspace`, mantendo visibilidade de repositorios irmaos para `pnpm link`.
+- A imagem final usa `node tooling/scripts/docker-entrypoint.cjs` e aceita `api` como `CMD` default ou `worker` como argumento explicito.
+- A validacao executada nesta entrega cobriu `corepack pnpm build`, carga dos scripts Node e `docker compose -f docker-compose.dev.yml config`.
+- O `docker build --target prod` nao foi executado no ambiente desta entrega porque o engine local do Docker estava indisponivel.
+
+### Commit Contexts
+
+- `feat(docker-image): adicionar build multi-stage e entrypoint`
+- `feat(docker-dev): adicionar compose e bootstrap com pnpm link`
+- `feat(docker-env): adicionar scripts e exemplos de ambiente`
+- `docs(docker): documentar bootstrap e runtime`
+- `docs(changelog): registrar bootstrap Docker`
+
 ## [2026-03-28] - Falha terminal de publicacao no outbox do orchestrator
 
 ### Added

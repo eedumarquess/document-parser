@@ -103,6 +103,86 @@ O repositorio ja contem:
 - estrutura hexagonal em ambos os servicos
 - suites `domain`, `application`, `contracts` e `e2e`
 
+## Como iniciar
+
+### Sem Docker
+
+Para subir localmente sem containers:
+
+1. instale `Node.js 22` e rode `corepack enable`
+2. rode `corepack pnpm install`
+3. copie `.env.example` para `.env` e carregue as variaveis no shell ou na IDE
+4. garanta que `MongoDB`, `RabbitMQ` e `MinIO` estejam acessiveis nas URLs configuradas
+5. suba a API com `corepack pnpm run dev:api`
+6. suba o worker com `corepack pnpm run dev:worker`
+
+Por default, a API escuta na porta `3000`. Para o fluxo distribuido completo, use runtime `real` com as variaveis abaixo:
+
+- `MONGODB_URI`
+- `RABBITMQ_URL`
+- `RABBITMQ_QUEUE_PROCESSING_REQUESTED`
+- `MINIO_ENDPOINT`
+- `MINIO_PORT`
+- `MINIO_USE_SSL`
+- `MINIO_ACCESS_KEY`
+- `MINIO_SECRET_KEY`
+- `MINIO_BUCKET_ORIGINALS`
+
+Variaveis opcionais de LLM remoto no worker:
+
+- `OPENROUTER_API_KEY`
+- `OPENROUTER_MODEL`
+- `OPENROUTER_BASE_URL`
+- `OPENROUTER_SITE_URL`
+- `OPENROUTER_APP_NAME`
+- `HUGGINGFACE_API_KEY`
+- `HUGGINGFACE_MODEL`
+- `HUGGINGFACE_BASE_URL`
+
+### Docker para desenvolvimento
+
+O repositorio agora inclui `Dockerfile` multi-stage e `docker-compose.dev.yml` para desenvolvimento em runtime `real`, reaproveitando infra externa ja existente.
+
+1. copie `.env.docker.dev.example` para `.env.docker.dev`
+2. ajuste a conectividade para `MongoDB`, `RabbitMQ` e `MinIO`
+3. opcionalmente defina `PNPM_LINK_MAP` para linkar libs locais montadas no mesmo diretorio pai
+4. suba a API com `docker compose --env-file .env.docker.dev -f docker-compose.dev.yml up --build api-dev`
+5. suba o worker com `docker compose --env-file .env.docker.dev -f docker-compose.dev.yml up --build worker-dev`
+
+O compose monta `..:/workspace`, entao o container enxerga repositorios irmaos do diretorio atual. O formato de `PNPM_LINK_MAP` e um JSON que mapeia o pacote consumidor para uma lista de caminhos absolutos dentro do container. Exemplo:
+
+```json
+{
+  "@document-parser/orchestrator-api": ["/workspace/minha-lib"],
+  "@document-parser/document-processing-worker": ["/workspace/outra-lib"]
+}
+```
+
+O bootstrap do container:
+
+- roda `pnpm install --frozen-lockfile` no monorepo
+- roda `pnpm install` em cada lib externa declarada
+- aplica `pnpm --filter <workspace> link <caminho-da-lib>`
+- inicia `tsc -b --watch` para os pacotes compartilhados e para o servico selecionado
+- inicia `node --watch` sobre `dist/src/main.js`
+
+### Build e runtime de producao
+
+Para gerar a imagem final:
+
+```bash
+docker build --target prod -t document-parser .
+```
+
+A mesma imagem pode subir a API ou o worker:
+
+```bash
+docker run --rm -p 3000:3000 --env-file .env document-parser api
+docker run --rm --env-file .env document-parser worker
+```
+
+Se nenhum comando for informado, a imagem sobe a API por default.
+
 ## Hardening operacional atual
 
 O estado atual do repositorio ja inclui os pilares principais da fase 3:
