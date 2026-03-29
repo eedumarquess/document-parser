@@ -29,11 +29,13 @@ import type {
 import { TOKENS } from '../../contracts/tokens';
 import { RetryPolicyService } from '../../domain/policies/retry-policy.service';
 import type {
-  PartialProcessingMessageContext,
   ProcessingExecutionContext,
   ProcessingMessageContext
 } from './processing-execution-context';
-import { IncompleteProcessingContextError } from './processing-context-loader.service';
+import {
+  IncompleteProcessingContextError,
+  ProcessingContextIntegrityError
+} from './processing-context-loader.service';
 import { AuditEventRecorder } from './audit-event-recorder.service';
 
 type RecoveryContext = ProcessingMessageContext | ProcessingExecutionContext;
@@ -58,10 +60,9 @@ export class ProcessingFailureRecoveryService {
     context?: RecoveryContext;
     now: Date;
   }): Promise<'retry_scheduled'> {
-    if (input.error instanceof IncompleteProcessingContextError) {
-      await this.handleIncompleteContext({
-        partialContext: input.error.partialContext,
-        missingResources: input.error.missingResources,
+    if (input.error instanceof ProcessingContextIntegrityError) {
+      await this.handleContextIntegrityFailure({
+        error: input.error,
         now: input.now
       });
       throw input.error;
@@ -180,37 +181,59 @@ export class ProcessingFailureRecoveryService {
     throw toError(input.error);
   }
 
-  private async handleIncompleteContext(input: {
-    partialContext: PartialProcessingMessageContext;
-    missingResources: string[];
+  private async handleContextIntegrityFailure(input: {
+    error: ProcessingContextIntegrityError;
     now: Date;
   }): Promise<void> {
-    const reasonMessage = 'Worker context is incomplete';
+    const partialContext = input.error.partialContext;
+    const trustedJob =
+      partialContext.job !== undefined && partialContext.job.jobId === partialContext.message.jobId
+        ? partialContext.job
+        : undefined;
+    const trustedAttempt =
+      partialContext.attempt !== undefined &&
+      partialContext.attempt.attemptId === partialContext.message.attemptId &&
+      partialContext.attempt.jobId === (trustedJob?.jobId ?? partialContext.message.jobId)
+        ? partialContext.attempt
+        : undefined;
+    const reasonMessage = input.error.message;
     const payloadSnapshot = {
-      jobId: input.partialContext.message.jobId,
-      attemptId: input.partialContext.message.attemptId,
-      documentId: input.partialContext.message.documentId,
-      missingResources: input.missingResources
+      jobId: partialContext.message.jobId,
+      attemptId: partialContext.message.attemptId,
+      documentId: partialContext.message.documentId,
+      contextIssue: input.error.contextIssue,
+      missingResources: input.error.missingResources,
+      mismatches: input.error.mismatches
     };
 
-    if (input.partialContext.job !== undefined && input.partialContext.attempt !== undefined) {
+    if (
+      input.error instanceof IncompleteProcessingContextError &&
+      trustedJob !== undefined &&
+      trustedAttempt !== undefined &&
+      trustedJob.documentId === partialContext.message.documentId &&
+      trustedAttempt.jobId === trustedJob.jobId
+    ) {
       await this.persistDeadLetter({
-        traceId: input.partialContext.message.traceId,
-        job: input.partialContext.job,
+        traceId: partialContext.message.traceId,
+        job: trustedJob,
         attempt: {
-          ...input.partialContext.attempt,
+          ...trustedAttempt,
           errorCode: ErrorCode.FATAL_FAILURE,
           errorDetails: {
-            ...(input.partialContext.attempt.errorDetails ?? {}),
+            ...(trustedAttempt.errorDetails ?? {}),
             message: reasonMessage,
-            missingResources: input.missingResources
+            contextIssue: input.error.contextIssue,
+            missingResources: input.error.missingResources,
+            mismatches: input.error.mismatches
           }
         },
         reasonCode: ErrorCode.FATAL_FAILURE,
         reasonMessage,
         payloadSnapshot,
         auditMetadata: {
-          missingResources: input.missingResources
+          contextIssue: input.error.contextIssue,
+          missingResources: input.error.missingResources,
+          mismatches: input.error.mismatches
         },
         now: input.now
       });
@@ -220,13 +243,13 @@ export class ProcessingFailureRecoveryService {
     await this.unitOfWork.runInTransaction(async () => {
       await this.deadLetters.save({
         dlqEventId: this.idGenerator.next('dlq'),
-        jobId: input.partialContext.message.jobId,
-        attemptId: input.partialContext.message.attemptId,
-        traceId: input.partialContext.message.traceId,
-        queueName: input.partialContext.job?.queueName ?? DEFAULT_PROCESSING_QUEUE_NAME,
+        jobId: partialContext.message.jobId,
+        attemptId: partialContext.message.attemptId,
+        traceId: partialContext.message.traceId,
+        queueName: trustedJob?.queueName ?? DEFAULT_PROCESSING_QUEUE_NAME,
         reasonCode: ErrorCode.FATAL_FAILURE,
         reasonMessage,
-        retryCount: input.partialContext.attempt?.attemptNumber ?? 0,
+        retryCount: trustedAttempt?.attemptNumber ?? 0,
         payloadSnapshot: this.redactionPolicy.redact(payloadSnapshot, {
           context: 'dead_letter'
         }) as Record<string, unknown>,
@@ -236,14 +259,16 @@ export class ProcessingFailureRecoveryService {
       });
       await this.auditEventRecorder.record({
         eventType: 'PROCESSING_FAILED',
-        traceId: input.partialContext.message.traceId,
+        traceId: partialContext.message.traceId,
         metadata: {
-          jobId: input.partialContext.message.jobId,
-          attemptId: input.partialContext.message.attemptId,
-          documentId: input.partialContext.message.documentId,
+          jobId: partialContext.message.jobId,
+          attemptId: partialContext.message.attemptId,
+          documentId: partialContext.message.documentId,
           errorCode: ErrorCode.FATAL_FAILURE,
           errorMessage: reasonMessage,
-          missingResources: input.missingResources
+          contextIssue: input.error.contextIssue,
+          missingResources: input.error.missingResources,
+          mismatches: input.error.mismatches
         },
         createdAt: input.now
       });

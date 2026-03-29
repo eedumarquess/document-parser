@@ -11,20 +11,60 @@ import type {
   ProcessingMessageContext
 } from './processing-execution-context';
 
-export class IncompleteProcessingContextError extends FatalFailureError {
-  public readonly partialContext: PartialProcessingMessageContext;
-  public readonly missingResources: string[];
+type ProcessingContextIssue = 'missing_resource' | 'relationship_mismatch';
 
-  public constructor(input: PartialProcessingMessageContext & { missingResources: string[] }) {
-    super('Worker context is incomplete', {
+type ProcessingContextMismatch = {
+  rule: string;
+  expected: string;
+  actual: string;
+};
+
+type ProcessingContextIntegrityErrorInput = PartialProcessingMessageContext & {
+  contextIssue: ProcessingContextIssue;
+  missingResources?: string[];
+  mismatches?: ProcessingContextMismatch[];
+};
+
+export class ProcessingContextIntegrityError extends FatalFailureError {
+  public readonly partialContext: PartialProcessingMessageContext;
+  public readonly contextIssue: ProcessingContextIssue;
+  public readonly missingResources?: string[];
+  public readonly mismatches?: ProcessingContextMismatch[];
+
+  protected constructor(message: string, input: ProcessingContextIntegrityErrorInput) {
+    super(message, {
       jobId: input.message.jobId,
       attemptId: input.message.attemptId,
       documentId: input.message.documentId,
-      missingResources: input.missingResources
+      contextIssue: input.contextIssue,
+      missingResources: input.missingResources,
+      mismatches: input.mismatches
+    });
+    this.name = 'ProcessingContextIntegrityError';
+    this.partialContext = input;
+    this.contextIssue = input.contextIssue;
+    this.missingResources = input.missingResources;
+    this.mismatches = input.mismatches;
+  }
+}
+
+export class IncompleteProcessingContextError extends ProcessingContextIntegrityError {
+  public constructor(input: PartialProcessingMessageContext & { missingResources: string[] }) {
+    super('Worker context is incomplete', {
+      ...input,
+      contextIssue: 'missing_resource'
     });
     this.name = 'IncompleteProcessingContextError';
-    this.partialContext = input;
-    this.missingResources = input.missingResources;
+  }
+}
+
+export class InconsistentProcessingContextError extends ProcessingContextIntegrityError {
+  public constructor(input: PartialProcessingMessageContext & { mismatches: ProcessingContextMismatch[] }) {
+    super('Worker context is inconsistent', {
+      ...input,
+      contextIssue: 'relationship_mismatch'
+    });
+    this.name = 'InconsistentProcessingContextError';
   }
 }
 
@@ -58,11 +98,57 @@ export class ProcessingContextLoader {
       });
     }
 
-    return {
+    const loadedContext: ProcessingMessageContext = {
       message,
       job: job!,
       document: document!,
       attempt: attempt!
     };
+    const mismatches = [
+      loadedContext.attempt.jobId !== loadedContext.job.jobId
+        ? {
+            rule: 'attempt.jobId === job.jobId',
+            expected: loadedContext.job.jobId,
+            actual: loadedContext.attempt.jobId
+          }
+        : undefined,
+      loadedContext.job.documentId !== loadedContext.document.documentId
+        ? {
+            rule: 'job.documentId === document.documentId',
+            expected: loadedContext.document.documentId,
+            actual: loadedContext.job.documentId
+          }
+        : undefined,
+      loadedContext.message.jobId !== loadedContext.job.jobId
+        ? {
+            rule: 'message.jobId === job.jobId',
+            expected: loadedContext.message.jobId,
+            actual: loadedContext.job.jobId
+          }
+        : undefined,
+      loadedContext.message.documentId !== loadedContext.document.documentId
+        ? {
+            rule: 'message.documentId === document.documentId',
+            expected: loadedContext.message.documentId,
+            actual: loadedContext.document.documentId
+          }
+        : undefined,
+      loadedContext.message.attemptId !== loadedContext.attempt.attemptId
+        ? {
+            rule: 'message.attemptId === attempt.attemptId',
+            expected: loadedContext.message.attemptId,
+            actual: loadedContext.attempt.attemptId
+          }
+        : undefined
+    ].filter((mismatch): mismatch is ProcessingContextMismatch => mismatch !== undefined);
+
+    if (mismatches.length > 0) {
+      throw new InconsistentProcessingContextError({
+        ...loadedContext,
+        mismatches
+      });
+    }
+
+    return loadedContext;
   }
 }

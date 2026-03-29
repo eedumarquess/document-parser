@@ -6,7 +6,7 @@ import type { ProcessJobMessageCommand } from '../commands/process-job-message.c
 import type { ProcessingMessageContext } from '../services/processing-execution-context';
 import { AttemptExecutionCoordinator } from '../services/attempt-execution-coordinator.service';
 import {
-  IncompleteProcessingContextError,
+  ProcessingContextIntegrityError,
   ProcessingContextLoader
 } from '../services/processing-context-loader.service';
 import { ProcessingFailureRecoveryService } from '../services/processing-failure-recovery.service';
@@ -190,8 +190,8 @@ export class ProcessJobMessageUseCase {
             await this.logging.log({
               level: 'error',
               message:
-                handledError instanceof IncompleteProcessingContextError
-                  ? 'Processing moved to dead letter due to incomplete worker context'
+                handledError instanceof ProcessingContextIntegrityError
+                  ? 'Processing moved to dead letter due to invalid worker context'
                   : 'Processing moved to dead letter',
               context: 'ProcessJobMessageUseCase',
               traceId: message.traceId,
@@ -200,9 +200,17 @@ export class ProcessJobMessageUseCase {
                   jobId: context?.job.jobId ?? message.jobId,
                   attemptId: context?.attempt.attemptId ?? message.attemptId,
                   documentId: context?.document.documentId ?? message.documentId,
+                  contextIssue:
+                    handledError instanceof ProcessingContextIntegrityError
+                      ? handledError.contextIssue
+                      : undefined,
                   missingResources:
-                    handledError instanceof IncompleteProcessingContextError
+                    handledError instanceof ProcessingContextIntegrityError
                       ? handledError.missingResources
+                      : undefined,
+                  mismatches:
+                    handledError instanceof ProcessingContextIntegrityError
+                      ? handledError.mismatches
                       : undefined,
                   operation: 'process_job_message',
                   errorMessage: handledError instanceof Error ? handledError.message : 'Unexpected failure'
