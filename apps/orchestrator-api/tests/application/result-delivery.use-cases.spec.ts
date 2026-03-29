@@ -9,6 +9,7 @@ import {
   InMemoryTracingAdapter,
   JobStatus,
   NotFoundError,
+  QueuePublicationOutboxStatus,
   RedactionPolicyService,
   Role,
   type TelemetryEventRecord
@@ -22,6 +23,7 @@ import {
   InMemoryPageArtifactRepository,
   InMemoryProcessingJobRepository,
   InMemoryProcessingResultRepository,
+  InMemoryQueuePublicationOutboxRepository,
   InMemoryTelemetryEventRepository
 } from '../../src/adapters/out/repositories/in-memory.repositories';
 import { GetJobOperationalContextUseCase } from '../../src/application/use-cases/get-job-operational-context.use-case';
@@ -157,6 +159,7 @@ const createOperationalContext = () => {
   const results = new InMemoryProcessingResultRepository();
   const artifacts = new InMemoryPageArtifactRepository();
   const deadLetters = new InMemoryDeadLetterRepository();
+  const outbox = new InMemoryQueuePublicationOutboxRepository();
   const audit = new InMemoryAuditRepository();
   const telemetry = new InMemoryTelemetryEventRepository();
   const logging = new InMemoryLoggingAdapter();
@@ -172,6 +175,7 @@ const createOperationalContext = () => {
     results,
     artifacts,
     deadLetters,
+    outbox,
     audit,
     telemetry,
     logging,
@@ -186,6 +190,7 @@ const createOperationalContext = () => {
       results,
       artifacts,
       deadLetters,
+      outbox,
       audit,
       telemetry,
       logging,
@@ -451,6 +456,34 @@ describe('GetJobOperationalContextUseCase', () => {
         engineUsed: 'OCR+LLM'
       })
     );
+    await context.outbox.save({
+      outboxId: 'outbox-ops-1',
+      ownerService: 'orchestrator-api',
+      flowType: 'submission',
+      dispatchKind: 'publish_requested',
+      jobId: job.jobId,
+      documentId: job.documentId,
+      attemptId: 'attempt-ops-1',
+      queueName: job.queueName,
+      messageBase: {
+        documentId: job.documentId,
+        jobId: job.jobId,
+        attemptId: 'attempt-ops-1',
+        traceId: 'trace-ops-1',
+        requestedMode: job.requestedMode,
+        pipelineVersion: job.pipelineVersion
+      },
+      finalizationMetadata: {
+        auditEventType: 'PROCESSING_JOB_QUEUED'
+      },
+      status: QueuePublicationOutboxStatus.PUBLISHED,
+      publishAttempts: 1,
+      availableAt: new Date('2026-03-25T12:01:00.000Z'),
+      publishedAt: new Date('2026-03-25T12:01:05.000Z'),
+      createdAt: new Date('2026-03-25T12:01:00.000Z'),
+      updatedAt: new Date('2026-03-25T12:01:05.000Z'),
+      retentionUntil: new Date('2026-04-01T12:01:05.000Z')
+    });
     await context.audit.record({
       eventId: 'audit-ops-1',
       eventType: 'PROCESSING_JOB_QUEUED',
@@ -542,6 +575,14 @@ describe('GetJobOperationalContextUseCase', () => {
       status: JobStatus.COMPLETED
     });
     expect(response.traceIds).toEqual(['trace-ops-1']);
+    expect(response.queuePublication).toMatchObject({
+      outboxId: 'outbox-ops-1',
+      status: 'PUBLISHED',
+      ownerService: 'orchestrator-api',
+      flowType: 'submission',
+      dispatchKind: 'publish_requested',
+      publishAttempts: 1
+    });
     expect(response.artifacts).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -574,6 +615,10 @@ describe('GetJobOperationalContextUseCase', () => {
         expect.objectContaining({
           source: 'telemetry',
           title: 'document-parser-worker span'
+        }),
+        expect.objectContaining({
+          source: 'outbox',
+          title: 'Queue publication PUBLISHED'
         }),
         expect.objectContaining({
           source: 'result',

@@ -9,11 +9,9 @@ import {
   NotFoundError,
   RedactionPolicyService,
   Role,
-  TransientFailureError,
   ValidationError
 } from '@document-parser/shared-kernel';
 import { FixedClock, IncrementalIdGenerator, buildActor, buildUploadedFile } from '@document-parser/testkit';
-import { InMemoryJobPublisherAdapter } from '../../src/adapters/out/queue/in-memory-job-publisher.adapter';
 import {
   InMemoryAuditRepository,
   InMemoryDeadLetterRepository,
@@ -21,6 +19,7 @@ import {
   InMemoryJobAttemptRepository,
   InMemoryProcessingJobRepository,
   InMemoryProcessingResultRepository,
+  InMemoryQueuePublicationOutboxRepository,
   InMemoryUnitOfWork
 } from '../../src/adapters/out/repositories/in-memory.repositories';
 import { InMemoryBinaryStorageAdapter } from '../../src/adapters/out/storage/in-memory-binary-storage.adapter';
@@ -32,7 +31,6 @@ import { ReplayDeadLetterUseCase } from '../../src/application/use-cases/replay-
 import { ReprocessDocumentUseCase } from '../../src/application/use-cases/reprocess-document.use-case';
 import { AuditEventRecorder } from '../../src/application/services/audit-event-recorder.service';
 import { DerivedJobOrchestrator } from '../../src/application/services/derived-job-orchestrator.service';
-import { QueuePublicationFailureHandler } from '../../src/application/services/queue-publication-failure-handler.service';
 import { CompatibleResultReusePolicy } from '../../src/domain/policies/compatible-result-reuse.policy';
 import { DocumentStoragePolicy } from '../../src/domain/policies/document-storage.policy';
 import { DocumentAcceptancePolicy } from '../../src/domain/policies/document-acceptance.policy';
@@ -71,11 +69,7 @@ class FailingUnitOfWork {
 
 const createSubmitDocumentUseCase = (overrides: Partial<{
   storage: InMemoryBinaryStorageAdapter;
-  publisher: InMemoryJobPublisherAdapter | {
-    messages?: unknown[];
-    publishRequested(message: unknown): Promise<void>;
-    publishRetry(message: unknown, retryAttempt: number): Promise<void>;
-  };
+  outbox: InMemoryQueuePublicationOutboxRepository;
   unitOfWork: { runInTransaction<T>(work: () => Promise<T>): Promise<T> };
 }> = {}) => {
   const authorization = new SimpleRbacAuthorizationAdapter();
@@ -89,7 +83,7 @@ const createSubmitDocumentUseCase = (overrides: Partial<{
   const attempts = new InMemoryJobAttemptRepository();
   const results = new InMemoryProcessingResultRepository();
   const deadLetters = new InMemoryDeadLetterRepository();
-  const publisher = overrides.publisher ?? new InMemoryJobPublisherAdapter();
+  const outbox = overrides.outbox ?? new InMemoryQueuePublicationOutboxRepository();
   const audit = new InMemoryAuditRepository();
   const logging = new InMemoryLoggingAdapter();
   const metrics = new InMemoryMetricsAdapter();
@@ -98,14 +92,12 @@ const createSubmitDocumentUseCase = (overrides: Partial<{
   const retentionPolicy = new RetentionPolicyService();
   const redactionPolicy = new RedactionPolicyService();
   const auditEventRecorder = new AuditEventRecorder(audit, idGenerator, retentionPolicy, redactionPolicy);
-  const queuePublicationFailureHandler = new QueuePublicationFailureHandler(jobs, unitOfWork, auditEventRecorder);
   const derivedJobOrchestrator = new DerivedJobOrchestrator(
     idGenerator,
     jobs,
     attempts,
-    publisher,
-    unitOfWork,
-    queuePublicationFailureHandler
+    outbox,
+    unitOfWork
   );
 
   return {
@@ -120,7 +112,7 @@ const createSubmitDocumentUseCase = (overrides: Partial<{
     attempts,
     results,
     deadLetters,
-    publisher,
+    outbox,
     audit,
     logging,
     metrics,
@@ -129,7 +121,6 @@ const createSubmitDocumentUseCase = (overrides: Partial<{
     retentionPolicy,
     redactionPolicy,
     auditEventRecorder,
-    queuePublicationFailureHandler,
     derivedJobOrchestrator,
     useCase: new SubmitDocumentUseCase(
       authorization,
@@ -143,7 +134,7 @@ const createSubmitDocumentUseCase = (overrides: Partial<{
       attempts,
       results,
       results,
-      publisher,
+      outbox,
       logging,
       metrics,
       tracing,
@@ -154,8 +145,7 @@ const createSubmitDocumentUseCase = (overrides: Partial<{
       new DocumentStoragePolicy(retentionPolicy),
       retentionPolicy,
       redactionPolicy,
-      auditEventRecorder,
-      queuePublicationFailureHandler
+      auditEventRecorder
     )
   };
 };
@@ -188,7 +178,7 @@ const createReplayDeadLetterUseCase = (context: ReturnType<typeof createSubmitDo
   );
 
 describe('SubmitDocumentUseCase', () => {
-  it('queues a new job and stores the document', async () => {
+  it('accepts a new job, stores the document and persists queue publication in the outbox', async () => {
     const context = createSubmitDocumentUseCase();
 
     const response = await context.useCase.execute(
@@ -201,15 +191,32 @@ describe('SubmitDocumentUseCase', () => {
       'trace-submit-new-job'
     );
 
-    expect(response.status).toBe(JobStatus.QUEUED);
+    expect(response.status).toBe(JobStatus.PUBLISH_PENDING);
     expect(response.pipelineVersion).toBe(DEFAULT_PIPELINE_VERSION);
     expect(response.outputVersion).toBe(DEFAULT_OUTPUT_VERSION);
-    expect(context.publisher.messages).toHaveLength(1);
     expect(await context.documents.findById(response.documentId)).toBeDefined();
     expect(await context.jobs.findById(response.jobId)).toMatchObject({
-      status: JobStatus.QUEUED,
+      status: JobStatus.PUBLISH_PENDING,
       reusedResult: false
     });
+    await expect(context.attempts.listByJobId(response.jobId)).resolves.toMatchObject([
+      {
+        status: 'PENDING',
+        attemptNumber: 1
+      }
+    ]);
+    await expect(context.outbox.list()).resolves.toEqual([
+      expect.objectContaining({
+        jobId: response.jobId,
+        documentId: response.documentId,
+        attemptId: expect.any(String),
+        flowType: 'submission',
+        dispatchKind: 'publish_requested',
+        ownerService: 'orchestrator-api',
+        queueName: 'document-processing.requested',
+        status: 'PENDING'
+      })
+    ]);
   });
 
   it('reuses the existing canonical document when the hash matches', async () => {
@@ -237,7 +244,7 @@ describe('SubmitDocumentUseCase', () => {
     );
 
     expect(secondResponse.documentId).toBe(firstResponse.documentId);
-    expect(context.publisher.messages).toHaveLength(2);
+    await expect(context.outbox.list()).resolves.toHaveLength(2);
   });
 
   it('creates a deduplicated job with reusedResult when a compatible result already exists', async () => {
@@ -291,7 +298,7 @@ describe('SubmitDocumentUseCase', () => {
 
     expect(secondResponse.reusedResult).toBe(true);
     expect(secondResponse.status).toBe(JobStatus.COMPLETED);
-    expect(context.publisher.messages).toHaveLength(1);
+    await expect(context.outbox.list()).resolves.toHaveLength(1);
     await expect(context.attempts.listByJobId(secondResponse.jobId)).resolves.toEqual([]);
   });
 
@@ -442,7 +449,7 @@ describe('SubmitDocumentUseCase', () => {
     await expect(context.results.findByJobId(thirdResponse.jobId)).resolves.toMatchObject({
       sourceJobId: originalResponse.jobId
     });
-    expect(context.publisher.messages).toHaveLength(1);
+    await expect(context.outbox.list()).resolves.toHaveLength(1);
     await expect(context.attempts.listByJobId(secondResponse.jobId)).resolves.toEqual([]);
     await expect(context.attempts.listByJobId(thirdResponse.jobId)).resolves.toEqual([]);
   });
@@ -500,7 +507,7 @@ describe('SubmitDocumentUseCase', () => {
 
     expect(secondResponse.reusedResult).toBe(true);
     expect(secondResponse.status).toBe(JobStatus.COMPLETED);
-    expect(context.publisher.messages).toHaveLength(1);
+    await expect(context.outbox.list()).resolves.toHaveLength(1);
   });
 
   it('bypasses compatible reuse when forceReprocess is true', async () => {
@@ -553,7 +560,7 @@ describe('SubmitDocumentUseCase', () => {
     );
 
     expect(secondResponse.reusedResult).toBe(false);
-    expect(context.publisher.messages).toHaveLength(2);
+    await expect(context.outbox.list()).resolves.toHaveLength(2);
   });
 
   it('restricts submission to OWNER', async () => {
@@ -572,39 +579,29 @@ describe('SubmitDocumentUseCase', () => {
     ).rejects.toBeInstanceOf(AuthorizationError);
   });
 
-  it('marks the job as STORED and returns a transient failure when queue publication fails', async () => {
-    const publisher = {
-      async publishRequested(): Promise<void> {
-        throw new Error('rabbitmq unavailable');
-      },
-      async publishRetry(): Promise<void> {
-        return;
-      }
-    };
-    const context = createSubmitDocumentUseCase({ publisher });
+  it('keeps the accepted job in PUBLISH_PENDING until a dispatcher publishes it', async () => {
+    const context = createSubmitDocumentUseCase();
 
-    await expect(
-      context.useCase.execute(
-        {
-          file: buildUploadedFile(),
-          requestedMode: 'STANDARD',
-          forceReprocess: false
-        },
-        buildActor(),
-        'trace-submit-publish-failed'
-      )
-    ).rejects.toBeInstanceOf(TransientFailureError);
-
-    const [storedJob] = await context.jobs.list();
-    expect(storedJob).toMatchObject({
-      status: JobStatus.STORED,
-      errorCode: 'TRANSIENT_FAILURE'
-    });
-    await expect(context.attempts.listByJobId(storedJob.jobId)).resolves.toMatchObject([
+    const response = await context.useCase.execute(
       {
-        status: 'PENDING'
-      }
-    ]);
+        file: buildUploadedFile(),
+        requestedMode: 'STANDARD',
+        forceReprocess: false
+      },
+      buildActor(),
+      'trace-submit-outbox-pending'
+    );
+
+    await expect(context.jobs.findById(response.jobId)).resolves.toMatchObject({
+      status: JobStatus.PUBLISH_PENDING
+    });
+    await expect(context.outbox.findLatestByJobId(response.jobId)).resolves.toMatchObject({
+      messageBase: expect.objectContaining({
+        traceId: 'trace-submit-outbox-pending',
+        requestedMode: 'STANDARD'
+      }),
+      publishAttempts: 0
+    });
   });
 
   it('deletes a newly uploaded binary when the first transaction fails', async () => {
@@ -700,7 +697,7 @@ describe('ReprocessDocumentUseCase', () => {
     ).rejects.toBeInstanceOf(AuthorizationError);
   });
 
-  it('creates a new queued job that points to the original job', async () => {
+  it('creates a new publish-pending job that points to the original job', async () => {
     const context = createSubmitDocumentUseCase();
     const actor = buildActor();
     const initialJob = await context.useCase.execute(
@@ -724,17 +721,17 @@ describe('ReprocessDocumentUseCase', () => {
 
     expect(response.jobId).not.toBe(initialJob.jobId);
     expect(await context.jobs.findById(response.jobId)).toMatchObject({
-      status: JobStatus.QUEUED,
+      status: JobStatus.PUBLISH_PENDING,
       reprocessOfJobId: initialJob.jobId,
       forceReprocess: true
     });
     await expect(context.attempts.listByJobId(response.jobId)).resolves.toMatchObject([
       {
-        status: 'QUEUED',
+        status: 'PENDING',
         attemptNumber: 1
       }
     ]);
-    expect(context.publisher.messages).toHaveLength(2);
+    await expect(context.outbox.list()).resolves.toHaveLength(2);
   });
 });
 
@@ -764,7 +761,7 @@ describe('ReplayDeadLetterUseCase', () => {
     retentionUntil: new Date('2026-09-21T12:00:00.000Z')
   });
 
-  it('creates a new queued replay job and marks the dead letter as replayed only after publish', async () => {
+  it('creates a new publish-pending replay job and keeps the dead letter unreplayed until dispatch finalization', async () => {
     const context = createSubmitDocumentUseCase();
     const actor = buildActor();
     const sourceJob = await context.useCase.execute(
@@ -795,15 +792,18 @@ describe('ReplayDeadLetterUseCase', () => {
 
     expect(response.jobId).not.toBe(sourceJob.jobId);
     expect(await context.jobs.findById(response.jobId)).toMatchObject({
-      status: JobStatus.QUEUED,
+      status: JobStatus.PUBLISH_PENDING,
       reprocessOfJobId: sourceJob.jobId
     });
     await expect(context.deadLetters.findById('dlq-1')).resolves.toMatchObject({
-      replayedAt: expect.any(Date)
+      replayedAt: undefined
     });
-    expect((context.publisher.messages ?? []).at(-1)).toMatchObject({
+    await expect(context.outbox.findLatestByJobId(response.jobId)).resolves.toMatchObject({
       jobId: response.jobId,
-      traceId: 'trace-replay-success'
+      flowType: 'replay',
+      messageBase: expect.objectContaining({
+        traceId: 'trace-replay-success'
+      })
     });
   });
 
@@ -855,22 +855,8 @@ describe('ReplayDeadLetterUseCase', () => {
     ).rejects.toBeInstanceOf(ValidationError);
   });
 
-  it('keeps dead_letter_events unreplayed when the replay publish fails', async () => {
-    let publishCount = 0;
-    const publisher = {
-      messages: [] as unknown[],
-      async publishRequested(message: unknown): Promise<void> {
-        publishCount += 1;
-        if (publishCount > 1) {
-          throw new Error('rabbitmq unavailable');
-        }
-        this.messages.push(message);
-      },
-      async publishRetry(): Promise<void> {
-        return;
-      }
-    };
-    const context = createSubmitDocumentUseCase({ publisher });
+  it('records replay acceptance in the outbox without mutating replayedAt synchronously', async () => {
+    const context = createSubmitDocumentUseCase();
     const actor = buildActor();
     const sourceJob = await context.useCase.execute(
       {
@@ -898,10 +884,22 @@ describe('ReplayDeadLetterUseCase', () => {
         actor,
         'trace-replay-failure'
       )
-    ).rejects.toBeInstanceOf(TransientFailureError);
+    ).resolves.toMatchObject({
+      status: JobStatus.PUBLISH_PENDING
+    });
 
     await expect(context.deadLetters.findById('dlq-1')).resolves.toMatchObject({
       replayedAt: undefined
     });
+    await expect(context.outbox.list()).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          flowType: 'replay',
+          messageBase: expect.objectContaining({
+            traceId: 'trace-replay-failure'
+          })
+        })
+      ])
+    );
   });
 });

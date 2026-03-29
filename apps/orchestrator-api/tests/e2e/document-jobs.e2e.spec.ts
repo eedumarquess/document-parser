@@ -42,7 +42,7 @@ describe('Document jobs e2e', () => {
   let lastPublishedTraceId: string | undefined;
 
   const waitForJobStatus = async (jobId: string, expectedStatus: string) => {
-    for (let attempt = 0; attempt < 20; attempt += 1) {
+    for (let attempt = 0; attempt < 80; attempt += 1) {
       const response = await request(app.getHttpServer())
         .get(`/v1/parsing/jobs/${jobId}`)
         .set('x-role', Role.OWNER);
@@ -193,7 +193,12 @@ describe('Document jobs e2e', () => {
           deadLetters,
           audit,
           telemetry,
-          publisher
+          publisher,
+          queuePublicationDispatcherRuntime: {
+            pollIntervalMs: 10,
+            batchSize: 20,
+            leaseMs: 30_000
+          }
         })
       ]
     }).compile();
@@ -216,10 +221,9 @@ describe('Document jobs e2e', () => {
         contentType: 'application/pdf'
       });
 
-    expect(createResponse.status).toBe(201);
+    expect(createResponse.status).toBe(202);
     expect(createResponse.headers['x-trace-id']).toBe('trace-e2e-submit');
-    expect(lastPublishedTraceId).toBe('trace-e2e-submit');
-    expect(createResponse.body.status).toBe('QUEUED');
+    expect(createResponse.body.status).toBe('PUBLISH_PENDING');
     expect(Object.keys(createResponse.body).sort()).toEqual(
       ['createdAt', 'documentId', 'jobId', 'outputVersion', 'pipelineVersion', 'requestedMode', 'reusedResult', 'status'].sort()
     );
@@ -227,6 +231,7 @@ describe('Document jobs e2e', () => {
 
     const statusResponse = await waitForJobStatus(createResponse.body.jobId, 'COMPLETED');
 
+    expect(lastPublishedTraceId).toBe('trace-e2e-submit');
     expect(statusResponse.body.status).toBe('COMPLETED');
     expect(statusResponse.headers['x-trace-id']).toBeDefined();
     expect(Object.keys(statusResponse.body).sort()).toEqual(
@@ -335,7 +340,8 @@ describe('Document jobs e2e', () => {
         contentType: 'application/pdf'
       });
 
-    expect(createResponse.status).toBe(201);
+    expect(createResponse.status).toBe(202);
+    expect(createResponse.body.status).toBe('PUBLISH_PENDING');
 
     await waitForJobStatus(createResponse.body.jobId, 'COMPLETED');
 
@@ -413,9 +419,9 @@ describe('Document jobs e2e', () => {
       .set('x-role', Role.OWNER)
       .send({ reason: 'model update' });
 
-    expect(reprocessResponse.status).toBe(201);
+    expect(reprocessResponse.status).toBe(202);
     expect(reprocessResponse.body.jobId).not.toBe(createResponse.body.jobId);
-    expect(reprocessResponse.body.status).toBe('QUEUED');
+    expect(reprocessResponse.body.status).toBe('PUBLISH_PENDING');
 
     await waitForJobStatus(reprocessResponse.body.jobId, 'COMPLETED');
 
@@ -445,7 +451,7 @@ describe('Document jobs e2e', () => {
     });
   });
 
-  it('replays a dead letter into a new queued job and marks the record as replayed', async () => {
+  it('replays a dead letter into a new publish-pending job and marks the record as replayed after dispatch', async () => {
     const createResponse = await request(app.getHttpServer())
       .post('/v1/parsing/jobs')
       .set('x-role', Role.OWNER)
@@ -480,12 +486,13 @@ describe('Document jobs e2e', () => {
       .set('x-trace-id', 'trace-e2e-replay')
       .send({ reason: 'manual replay' });
 
-    expect(replayResponse.status).toBe(201);
+    expect(replayResponse.status).toBe(202);
     expect(replayResponse.headers['x-trace-id']).toBe('trace-e2e-replay');
     expect(replayResponse.body.jobId).not.toBe(createResponse.body.jobId);
-    expect(lastPublishedTraceId).toBe('trace-e2e-replay');
+    expect(replayResponse.body.status).toBe('PUBLISH_PENDING');
 
     await waitForJobStatus(replayResponse.body.jobId, 'COMPLETED');
+    expect(lastPublishedTraceId).toBe('trace-e2e-replay');
     await expect(deadLetters.findById('dlq-replay-1')).resolves.toMatchObject({
       replayedAt: expect.any(Date)
     });
@@ -554,6 +561,10 @@ describe('Document jobs e2e', () => {
       documentId: createResponse.body.documentId,
       status: 'COMPLETED'
     });
+    expect(contextResponse.body.queuePublication).toMatchObject({
+      ownerService: 'orchestrator-api',
+      flowType: 'submission'
+    });
     expect(contextResponse.body.traceIds).toEqual(expect.arrayContaining(['trace-e2e-ops']));
     expect(contextResponse.body.artifacts).toEqual(
       expect.arrayContaining([
@@ -589,6 +600,7 @@ describe('Document jobs e2e', () => {
     expect(panelResponse.text).toContain('Operational Context');
     expect(panelResponse.text).toContain(createResponse.body.jobId);
     expect(panelResponse.text).toContain('document-parser-worker');
+    expect(panelResponse.text).toContain('Queue Publication');
     expect(panelResponse.text).toContain('cpf [cpf] email [email]');
     expect(panelResponse.text).toContain('cpf [cpf] [token]');
     expect(panelResponse.text).toContain('email [email] [token]');
