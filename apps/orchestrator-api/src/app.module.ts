@@ -21,6 +21,7 @@ import {
   InMemoryPageArtifactRepository,
   InMemoryProcessingJobRepository,
   InMemoryProcessingResultRepository,
+  InMemoryQueuePublicationOutboxRepository,
   InMemoryTelemetryEventRepository,
   InMemoryUnitOfWork
 } from './adapters/out/repositories/in-memory.repositories';
@@ -34,6 +35,11 @@ import { AuditEventRecorder } from './application/services/audit-event-recorder.
 import { ArtifactPreviewService } from './application/services/artifact-preview.service';
 import { DerivedJobOrchestrator } from './application/services/derived-job-orchestrator.service';
 import { QueuePublicationFailureHandler } from './application/services/queue-publication-failure-handler.service';
+import {
+  DEFAULT_QUEUE_PUBLICATION_DISPATCHER_RUNTIME,
+  QueuePublicationOutboxDispatcherService,
+  type QueuePublicationDispatcherRuntime
+} from './application/services/queue-publication-outbox-dispatcher.service';
 import { ReplayDeadLetterUseCase } from './application/use-cases/replay-dead-letter.use-case';
 import { ReprocessDocumentUseCase } from './application/use-cases/reprocess-document.use-case';
 import { SubmitDocumentUseCase } from './application/use-cases/submit-document.use-case';
@@ -55,6 +61,7 @@ import type {
   PageArtifactRepositoryPort,
   ProcessingJobRepositoryPort,
   ProcessingResultRepositoryPort,
+  QueuePublicationOutboxRepositoryPort,
   TelemetryEventRepositoryPort,
   TracingPort,
   UnitOfWorkPort
@@ -78,6 +85,7 @@ export type OrchestratorProviderOverrides = Partial<{
   results: ProcessingResultRepositoryPort;
   artifacts: PageArtifactRepositoryPort;
   deadLetters: DeadLetterRepositoryPort;
+  queuePublicationOutbox: QueuePublicationOutboxRepositoryPort;
   compatibleResults: CompatibleResultLookupPort;
   publisher: JobPublisherPort;
   audit: AuditPort;
@@ -87,6 +95,7 @@ export type OrchestratorProviderOverrides = Partial<{
   tracing: TracingPort;
   authorization: AuthorizationPort;
   unitOfWork: UnitOfWorkPort;
+  queuePublicationDispatcherRuntime: QueuePublicationDispatcherRuntime;
   serviceName: string;
 }>;
 
@@ -121,10 +130,18 @@ export class OrchestratorApiModule {
         useValue: overrides.deadLetters ?? new InMemoryDeadLetterRepository()
       },
       {
+        provide: TOKENS.QUEUE_PUBLICATION_OUTBOX_REPOSITORY,
+        useValue: overrides.queuePublicationOutbox ?? new InMemoryQueuePublicationOutboxRepository()
+      },
+      {
         provide: TOKENS.COMPATIBLE_RESULT_LOOKUP,
         useValue: overrides.compatibleResults ?? results
       },
       { provide: TOKENS.TELEMETRY_REPOSITORY, useValue: telemetry },
+      {
+        provide: TOKENS.QUEUE_PUBLICATION_DISPATCHER_RUNTIME,
+        useValue: overrides.queuePublicationDispatcherRuntime ?? DEFAULT_QUEUE_PUBLICATION_DISPATCHER_RUNTIME
+      },
       { provide: TOKENS.UNIT_OF_WORK, useValue: overrides.unitOfWork ?? new InMemoryUnitOfWork() },
       { provide: TOKENS.JOB_PUBLISHER, useValue: overrides.publisher ?? new InMemoryJobPublisherAdapter() },
       { provide: TOKENS.AUDIT, useValue: overrides.audit ?? new InMemoryAuditRepository() },
@@ -144,6 +161,7 @@ export class OrchestratorApiModule {
       AuditEventRecorder,
       ArtifactPreviewService,
       QueuePublicationFailureHandler,
+      QueuePublicationOutboxDispatcherService,
       DerivedJobOrchestrator,
       SubmitDocumentUseCase,
       GetJobStatusUseCase,
