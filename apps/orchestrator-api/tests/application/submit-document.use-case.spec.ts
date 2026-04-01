@@ -1,3 +1,4 @@
+import { CompatibilityKey } from '@document-parser/document-processing-domain';
 import {
   AuthorizationError,
   DEFAULT_OUTPUT_VERSION,
@@ -35,7 +36,6 @@ import { CompatibleResultReusePolicy } from '../../src/domain/policies/compatibl
 import { DocumentStoragePolicy } from '../../src/domain/policies/document-storage.policy';
 import { DocumentAcceptancePolicy } from '../../src/domain/policies/document-acceptance.policy';
 import { PageCountPolicy } from '../../src/domain/policies/page-count.policy';
-import { CompatibilityKey } from '../../src/domain/value-objects/compatibility-key';
 import { RetentionPolicyService } from '../../src/domain/services/retention-policy.service';
 import type { ProcessingResultRecord } from '../../src/contracts/models';
 

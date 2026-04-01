@@ -1,3 +1,4 @@
+import { CompatibilityKey } from '@document-parser/document-processing-domain';
 import { connect as connectAmqp } from 'amqplib';
 import { AttemptStatus, JobStatus, Role } from '@document-parser/shared-kernel';
 import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainers';
@@ -15,7 +16,6 @@ import {
 } from '../../src/adapters/out/repositories/mongodb.repositories';
 import { MongoDatabaseProvider, MongoSessionContext, MongoUnitOfWorkAdapter } from '../../src/adapters/out/repositories/mongodb.provider';
 import { MinioBinaryStorageAdapter } from '../../src/adapters/out/storage/minio-binary-storage.adapter';
-import { CompatibilityKey } from '../../src/domain/value-objects/compatibility-key';
 
 const expectNoTemplateFields = (payload: Record<string, unknown>) => {
   expect(payload).not.toHaveProperty('templateId');

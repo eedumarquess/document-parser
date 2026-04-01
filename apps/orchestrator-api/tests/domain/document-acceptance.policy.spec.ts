@@ -1,6 +1,6 @@
+import { CompatibilityKey } from '@document-parser/document-processing-domain';
 import { JobStatus, MAX_FILE_SIZE_BYTES } from '@document-parser/shared-kernel';
 import { DocumentAcceptancePolicy } from '../../src/domain/policies/document-acceptance.policy';
-import { CompatibilityKey } from '../../src/domain/value-objects/compatibility-key';
 import { CompatibleResultReusePolicy } from '../../src/domain/policies/compatible-result-reuse.policy';
 
 describe('DocumentAcceptancePolicy', () => {
