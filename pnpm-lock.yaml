@@ -53,6 +53,9 @@ importers:
       '@document-parser/document-processing-domain':
         specifier: workspace:*
         version: link:../../packages/document-processing-domain
+      '@document-parser/shared-infrastructure':
+        specifier: workspace:*
+        version: link:../../packages/shared-infrastructure
       '@document-parser/shared-kernel':
         specifier: workspace:*
         version: link:../../packages/shared-kernel
@@ -90,6 +93,9 @@ importers:
       '@document-parser/document-processing-domain':
         specifier: workspace:*
         version: link:../../packages/document-processing-domain
+      '@document-parser/shared-infrastructure':
+        specifier: workspace:*
+        version: link:../../packages/shared-infrastructure
       '@document-parser/shared-kernel':
         specifier: workspace:*
         version: link:../../packages/shared-kernel
@@ -133,6 +139,18 @@ importers:
       '@document-parser/shared-kernel':
         specifier: workspace:*
         version: link:../shared-kernel
+
+  packages/shared-infrastructure:
+    dependencies:
+      '@document-parser/shared-kernel':
+        specifier: workspace:*
+        version: link:../shared-kernel
+      amqplib:
+        specifier: ^0.10.5
+        version: 0.10.9
+      mongodb:
+        specifier: ^6.16.0
+        version: 6.21.0
 
   packages/shared-kernel: {}
 
