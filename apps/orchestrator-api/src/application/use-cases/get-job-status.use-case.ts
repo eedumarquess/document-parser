@@ -13,6 +13,7 @@ import type {
 } from '../../contracts/ports';
 import { TOKENS } from '../../contracts/tokens';
 import { RetentionPolicyService } from '../../domain/services/retention-policy.service';
+import { toJobResponse } from '../mappers/job-response.mapper';
 import type { GetJobStatusQuery } from '../queries/get-job-status.query';
 import { RedactionPolicyService } from '@document-parser/shared-kernel';
 
@@ -95,16 +96,7 @@ export class GetJobStatusUseCase {
             }
           });
 
-          return {
-            jobId: job.jobId,
-            documentId: job.documentId,
-            status: job.status,
-            requestedMode: job.requestedMode,
-            pipelineVersion: job.pipelineVersion,
-            outputVersion: job.outputVersion,
-            reusedResult: job.reusedResult,
-            createdAt: job.createdAt.toISOString()
-          };
+          return toJobResponse(job);
         } catch (error) {
           await this.metrics.increment({
             name: 'orchestrator.job_status.failed',

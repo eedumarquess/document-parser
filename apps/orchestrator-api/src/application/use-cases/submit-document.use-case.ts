@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  CompatibilityKey,
   VersionStampService,
   createDeduplicatedJob,
   createPendingAttempt,
@@ -44,8 +45,8 @@ import { DocumentAcceptancePolicy } from '../../domain/policies/document-accepta
 import { DocumentStoragePolicy } from '../../domain/policies/document-storage.policy';
 import { PageCountPolicy } from '../../domain/policies/page-count.policy';
 import { RetentionPolicyService } from '../../domain/services/retention-policy.service';
-import { CompatibilityKey } from '../../domain/value-objects/compatibility-key';
 import { DocumentHash } from '../../domain/value-objects/document-hash';
+import { toJobResponse } from '../mappers/job-response.mapper';
 import { AuditEventRecorder } from '../services/audit-event-recorder.service';
 import { buildOrchestratorQueuePublicationOutboxRecord } from '../services/queue-publication-outbox-dispatcher.service';
 import type { SubmitDocumentCommand } from '../commands/submit-document.command';
@@ -229,7 +230,7 @@ export class SubmitDocumentUseCase {
             }
           });
 
-          return this.toJobResponse(persistedSubmission.job);
+          return toJobResponse(persistedSubmission.job);
         } catch (error) {
           await this.metrics.increment({
             name: 'orchestrator.submit_document.failed',
@@ -529,28 +530,6 @@ export class SubmitDocumentUseCase {
       });
     });
 
-    return this.toJobResponse(job);
-  }
-
-  private toJobResponse(job: {
-    jobId: string;
-    documentId: string;
-    status: JobStatus;
-    requestedMode: string;
-    pipelineVersion: string;
-    outputVersion: string;
-    reusedResult: boolean;
-    createdAt: Date;
-  }): JobResponse {
-    return {
-      jobId: job.jobId,
-      documentId: job.documentId,
-      status: job.status,
-      requestedMode: job.requestedMode,
-      pipelineVersion: job.pipelineVersion,
-      outputVersion: job.outputVersion,
-      reusedResult: job.reusedResult,
-      createdAt: job.createdAt.toISOString()
-    };
+    return toJobResponse(job);
   }
 }
