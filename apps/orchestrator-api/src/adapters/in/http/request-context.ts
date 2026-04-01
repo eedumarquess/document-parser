@@ -1,8 +1,7 @@
-import { HttpException } from '@nestjs/common';
-import { ErrorCode, Role, type AuditActor } from '@document-parser/shared-kernel';
+import { Role, type AuditActor } from '@document-parser/shared-kernel';
 import { randomUUID } from 'crypto';
 import type { Request, Response } from 'express';
-import type { HttpErrorResponse } from '../../../contracts/http';
+import { createValidationHttpException } from './http-errors';
 
 const DEFAULT_ACTOR_ID = 'local-owner';
 const TRACE_ID_HEADER = 'x-trace-id';
@@ -40,15 +39,9 @@ const resolveRole = (rawRole: string | undefined): Role => {
     return rawRole;
   }
 
-  throw new HttpException(buildInvalidRoleErrorResponse(rawRole), 400);
-};
-
-const buildInvalidRoleErrorResponse = (receivedValue: string): HttpErrorResponse => ({
-  errorCode: ErrorCode.VALIDATION_ERROR,
-  message: 'Invalid x-role header',
-  metadata: {
+  throw createValidationHttpException('Invalid x-role header', {
     header: ROLE_HEADER,
     acceptedValues: [...ACCEPTED_ROLES],
-    receivedValue
-  }
-});
+    receivedValue: rawRole
+  });
+};

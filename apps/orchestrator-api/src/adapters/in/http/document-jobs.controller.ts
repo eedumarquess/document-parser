@@ -2,7 +2,6 @@ import {
   Body,
   Controller,
   Get,
-  HttpException,
   HttpStatus,
   Param,
   Post,
@@ -13,9 +12,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
-  ApplicationError,
   DEFAULT_REQUESTED_MODE,
-  ErrorCode,
   JobStatus
 } from '@document-parser/shared-kernel';
 import type { Request, Response } from 'express';
@@ -23,7 +20,7 @@ import { GetJobStatusUseCase } from '../../../application/use-cases/get-job-stat
 import { GetProcessingResultUseCase } from '../../../application/use-cases/get-processing-result.use-case';
 import { ReprocessDocumentUseCase } from '../../../application/use-cases/reprocess-document.use-case';
 import { SubmitDocumentUseCase } from '../../../application/use-cases/submit-document.use-case';
-import type { HttpErrorResponse } from '../../../contracts/http';
+import { createValidationHttpException, toHttpException } from './http-errors';
 import { resolveHttpRequestContext } from './request-context';
 
 type UploadedMultipartFile = {
@@ -53,7 +50,7 @@ export class DocumentJobsController {
     const { actor, traceId } = resolveHttpRequestContext(request, response);
 
     if (file === undefined) {
-      throw new HttpException(this.buildErrorResponse(ErrorCode.VALIDATION_ERROR, 'file is required'), 400);
+      throw createValidationHttpException('file is required');
     }
 
     try {
@@ -74,7 +71,7 @@ export class DocumentJobsController {
       this.applyAcceptedStatus(response, result.status);
       return result;
     } catch (error) {
-      throw this.toHttpException(error);
+      throw toHttpException(error);
     }
   }
 
@@ -89,7 +86,7 @@ export class DocumentJobsController {
     try {
       return await this.getJobStatusUseCase.execute({ jobId }, actor, traceId);
     } catch (error) {
-      throw this.toHttpException(error);
+      throw toHttpException(error);
     }
   }
 
@@ -104,7 +101,7 @@ export class DocumentJobsController {
     try {
       return await this.getProcessingResultUseCase.execute({ jobId }, actor, traceId);
     } catch (error) {
-      throw this.toHttpException(error);
+      throw toHttpException(error);
     }
   }
 
@@ -129,40 +126,11 @@ export class DocumentJobsController {
       this.applyAcceptedStatus(response, result.status);
       return result;
     } catch (error) {
-      throw this.toHttpException(error);
+      throw toHttpException(error);
     }
   }
 
   private applyAcceptedStatus(response: Response, status: JobStatus): void {
     response.status(status === JobStatus.PUBLISH_PENDING ? HttpStatus.ACCEPTED : HttpStatus.CREATED);
-  }
-
-  private toHttpException(error: unknown): HttpException {
-    if (error instanceof ApplicationError) {
-      return new HttpException(
-        this.buildErrorResponse(error.errorCode, error.message, error.metadata),
-        error.httpStatus
-      );
-    }
-
-    return new HttpException(
-      this.buildErrorResponse(
-        ErrorCode.FATAL_FAILURE,
-        error instanceof Error ? error.message : 'Unexpected failure'
-      ),
-      HttpStatus.INTERNAL_SERVER_ERROR
-    );
-  }
-
-  private buildErrorResponse(
-    errorCode: ErrorCode,
-    message: string,
-    metadata?: Record<string, unknown>
-  ): HttpErrorResponse {
-    return {
-      errorCode,
-      message,
-      metadata
-    };
   }
 }
