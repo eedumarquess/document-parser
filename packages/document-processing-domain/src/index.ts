@@ -1,3 +1,4 @@
+export * from './compatibility-key';
 export * from './failure-classification';
 export * from './job-lifecycle';
 export * from './models';
