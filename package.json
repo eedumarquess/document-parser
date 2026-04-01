@@ -4,7 +4,7 @@
   "private": true,
   "packageManager": "pnpm@10.6.3",
   "scripts": {
-    "build": "tsc -b packages/shared-kernel/tsconfig.json packages/document-processing-domain/tsconfig.json packages/testkit/tsconfig.json apps/orchestrator-api/tsconfig.json apps/document-processing-worker/tsconfig.json --force",
+    "build": "tsc -b packages/shared-kernel/tsconfig.json packages/document-processing-domain/tsconfig.json packages/shared-infrastructure/tsconfig.json packages/testkit/tsconfig.json apps/orchestrator-api/tsconfig.json apps/document-processing-worker/tsconfig.json --force",
     "build:api": "corepack pnpm --filter @document-parser/orchestrator-api build",
     "build:worker": "corepack pnpm --filter @document-parser/document-processing-worker build",
     "dev:api": "corepack pnpm run build:api && node apps/orchestrator-api/dist/src/main.js",
@@ -13,7 +13,7 @@
     "docker:dev:api": "node tooling/scripts/docker-dev-runner.cjs api",
     "docker:dev:worker": "node tooling/scripts/docker-dev-runner.cjs worker",
     "lint": "eslint .",
-    "typecheck": "tsc -b packages/shared-kernel/tsconfig.json packages/document-processing-domain/tsconfig.json packages/testkit/tsconfig.json apps/orchestrator-api/tsconfig.json apps/document-processing-worker/tsconfig.json --force --pretty false",
+    "typecheck": "tsc -b packages/shared-kernel/tsconfig.json packages/document-processing-domain/tsconfig.json packages/shared-infrastructure/tsconfig.json packages/testkit/tsconfig.json apps/orchestrator-api/tsconfig.json apps/document-processing-worker/tsconfig.json --force --pretty false",
     "test": "node tooling/scripts/run-all-tests.cjs",
     "test:domain": "jest --config jest.workspace.config.cjs --selectProjects orchestrator-domain worker-domain --silent",
     "test:application": "jest --config jest.workspace.config.cjs --selectProjects orchestrator-application worker-application --silent",

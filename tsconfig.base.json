@@ -19,6 +19,9 @@
       "@document-parser/shared-kernel": [
         "packages/shared-kernel/src"
       ],
+      "@document-parser/shared-infrastructure": [
+        "packages/shared-infrastructure/src"
+      ],
       "@document-parser/document-processing-domain": [
         "packages/document-processing-domain/src"
       ],

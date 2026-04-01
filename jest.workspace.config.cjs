@@ -13,6 +13,8 @@ const commonProjectConfig = {
   moduleNameMapper: {
     '^@document-parser/document-processing-domain$':
       '<rootDir>/../../packages/document-processing-domain/src',
+    '^@document-parser/shared-infrastructure$':
+      '<rootDir>/../../packages/shared-infrastructure/src',
     '^@document-parser/shared-kernel$': '<rootDir>/../../packages/shared-kernel/src',
     '^@document-parser/testkit$': '<rootDir>/../../packages/testkit/src'
   }
