@@ -11,6 +11,9 @@
       "path": "../../packages/document-processing-domain"
     },
     {
+      "path": "../../packages/shared-infrastructure"
+    },
+    {
       "path": "../../packages/shared-kernel"
     },
     {
