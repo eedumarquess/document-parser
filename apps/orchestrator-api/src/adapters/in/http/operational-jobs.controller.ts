@@ -1,16 +1,13 @@
 import {
   Controller,
   Get,
-  HttpException,
-  HttpStatus,
   Param,
   Req,
   Res
 } from '@nestjs/common';
-import { ApplicationError, ErrorCode } from '@document-parser/shared-kernel';
 import type { Request, Response } from 'express';
 import { GetJobOperationalContextUseCase } from '../../../application/use-cases/get-job-operational-context.use-case';
-import type { HttpErrorResponse } from '../../../contracts/http';
+import { toHttpException } from './http-errors';
 import { renderJobOperationalPanel } from './job-operational-panel.view';
 import { resolveHttpRequestContext } from './request-context';
 
@@ -31,7 +28,7 @@ export class OperationalJobsController {
     try {
       return await this.getJobOperationalContextUseCase.execute({ jobId }, actor, traceId);
     } catch (error) {
-      throw this.toHttpException(error);
+      throw toHttpException(error);
     }
   }
 
@@ -48,36 +45,7 @@ export class OperationalJobsController {
       response.setHeader('Content-Type', 'text/html; charset=utf-8');
       response.send(renderJobOperationalPanel(context));
     } catch (error) {
-      throw this.toHttpException(error);
+      throw toHttpException(error);
     }
-  }
-
-  private toHttpException(error: unknown): HttpException {
-    if (error instanceof ApplicationError) {
-      return new HttpException(
-        this.buildErrorResponse(error.errorCode, error.message, error.metadata),
-        error.httpStatus
-      );
-    }
-
-    return new HttpException(
-      this.buildErrorResponse(
-        ErrorCode.FATAL_FAILURE,
-        error instanceof Error ? error.message : 'Unexpected failure'
-      ),
-      HttpStatus.INTERNAL_SERVER_ERROR
-    );
-  }
-
-  private buildErrorResponse(
-    errorCode: ErrorCode,
-    message: string,
-    metadata?: Record<string, unknown>
-  ): HttpErrorResponse {
-    return {
-      errorCode,
-      message,
-      metadata
-    };
   }
 }
