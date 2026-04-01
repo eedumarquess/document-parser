@@ -1,3 +1,4 @@
+export * from './audit-event-recorder';
 export * from './constants';
 export * from './enums';
 export * from './errors';

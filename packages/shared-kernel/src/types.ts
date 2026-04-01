@@ -14,6 +14,19 @@ export type AuditActor = {
   role: Role;
 };
 
+export type AuditEventRecord = {
+  eventId: string;
+  eventType: string;
+  aggregateType?: string;
+  aggregateId?: string;
+  traceId: string;
+  actor: AuditActor;
+  metadata?: Record<string, unknown>;
+  redactedPayload?: Record<string, unknown>;
+  createdAt: Date;
+  retentionUntil: Date;
+};
+
 export type ProcessingJobRequestedMessage = {
   documentId: string;
   jobId: string;
