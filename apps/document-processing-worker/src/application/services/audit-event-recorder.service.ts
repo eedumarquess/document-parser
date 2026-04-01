@@ -1,5 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  BaseAuditEventRecorder,
+  type AuditEventRecorderInput,
   RedactionPolicyService,
   RetentionPolicyService,
   Role,
@@ -14,46 +16,23 @@ const SYSTEM_ACTOR: AuditActor = {
 };
 
 @Injectable()
-export class AuditEventRecorder {
+export class AuditEventRecorder extends BaseAuditEventRecorder {
   public constructor(
-    @Inject(TOKENS.AUDIT) private readonly audit: AuditPort,
-    @Inject(TOKENS.ID_GENERATOR) private readonly idGenerator: IdGeneratorPort,
-    private readonly retentionPolicy: RetentionPolicyService,
-    private readonly redactionPolicy: RedactionPolicyService
-  ) {}
-
-  public async record(input: {
-    eventType: string;
-    aggregateType?: string;
-    aggregateId?: string;
-    traceId: string;
-    actor?: AuditActor;
-    metadata?: Record<string, unknown>;
-    redactedPayload?: Record<string, unknown>;
-    createdAt: Date;
-  }): Promise<void> {
-    await this.audit.record({
-      eventId: this.idGenerator.next('audit'),
-      eventType: input.eventType,
-      aggregateType: input.aggregateType,
-      aggregateId: input.aggregateId,
-      traceId: input.traceId,
-      actor: input.actor ?? SYSTEM_ACTOR,
-      metadata:
-        input.metadata === undefined
-          ? undefined
-          : this.redactionPolicy.sanitizeMetadata(input.metadata, {
-              context: 'audit'
-            }),
-      redactedPayload:
-        input.redactedPayload ??
-        (input.metadata === undefined
-          ? undefined
-          : this.redactionPolicy.redact(input.metadata, {
-              context: 'audit'
-            })),
-      createdAt: input.createdAt,
-      retentionUntil: this.retentionPolicy.calculateAuditRetentionUntil(input.createdAt)
+    @Inject(TOKENS.AUDIT) audit: AuditPort,
+    @Inject(TOKENS.ID_GENERATOR) idGenerator: IdGeneratorPort,
+    retentionPolicy: RetentionPolicyService,
+    redactionPolicy: RedactionPolicyService
+  ) {
+    super({
+      save: async (event) => audit.record(event),
+      nextId: (prefix) => idGenerator.next(prefix),
+      retentionPolicy,
+      redactionPolicy,
+      defaultActor: SYSTEM_ACTOR
     });
+  }
+
+  public async record(input: AuditEventRecorderInput): Promise<void> {
+    await this.recordWithPolicy(input);
   }
 }

@@ -1,6 +1,6 @@
 import type {
   ArtifactReference,
-  AuditActor,
+  AuditEventRecord,
   QueuePublicationOutboxRecord
 } from '@document-parser/shared-kernel';
 
@@ -32,19 +32,6 @@ export type DocumentRecord = {
   updatedAt: Date;
 };
 
-export type AuditEventRecord = {
-  eventId: string;
-  eventType: string;
-  aggregateType?: string;
-  aggregateId?: string;
-  traceId: string;
-  actor: AuditActor;
-  metadata?: Record<string, unknown>;
-  redactedPayload?: Record<string, unknown>;
-  createdAt: Date;
-  retentionUntil: Date;
-};
-
 export type PageArtifactRecord = ArtifactReference & {
   documentId: string;
   jobId: string;
@@ -52,4 +39,4 @@ export type PageArtifactRecord = ArtifactReference & {
   retentionUntil: Date;
 };
 
-export type { QueuePublicationOutboxRecord };
+export type { AuditEventRecord, QueuePublicationOutboxRecord };
