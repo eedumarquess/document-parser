@@ -1,0 +1,17 @@
+{
+  "name": "@document-parser/shared-infrastructure",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "lint": "eslint src",
+    "typecheck": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "@document-parser/shared-kernel": "workspace:*",
+    "amqplib": "^0.10.5",
+    "mongodb": "^6.16.0"
+  }
+}
