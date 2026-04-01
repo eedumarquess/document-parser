@@ -1,6 +1,6 @@
+import { CompatibilityKey } from '@document-parser/document-processing-domain';
 import type { ProcessingOutcome } from '@document-parser/shared-kernel';
 import type { ProcessingResultRecord } from '../../contracts/models';
-import { CompatibilityKey } from '../value-objects/compatibility-key';
 
 export class ProcessingResultEntity {
   public static create(input: {

@@ -1,4 +1,5 @@
 import type { Collection } from 'mongodb';
+import { CompatibilityKey } from '@document-parser/document-processing-domain';
 import {
   JobStatus,
   QueuePublicationOutboxStatus,
@@ -28,7 +29,6 @@ import type {
   QueuePublicationOutboxRepositoryPort,
   TelemetryEventRepositoryPort
 } from '../../../contracts/ports';
-import { CompatibilityKey } from '../../../domain/value-objects/compatibility-key';
 import type { MongoDatabaseProvider, MongoSessionContext } from './mongodb.provider';
 
 type MongoDocumentShape = {

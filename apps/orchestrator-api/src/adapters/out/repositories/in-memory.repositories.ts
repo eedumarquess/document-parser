@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { CompatibilityKey } from '@document-parser/document-processing-domain';
 import {
   JobStatus,
   QueuePublicationOutboxStatus,
@@ -28,7 +29,6 @@ import type {
   ProcessingJobRecord,
   ProcessingResultRecord
 } from '../../../contracts/models';
-import { CompatibilityKey } from '../../../domain/value-objects/compatibility-key';
 
 @Injectable()
 export class InMemoryDocumentRepository implements DocumentRepositoryPort {
