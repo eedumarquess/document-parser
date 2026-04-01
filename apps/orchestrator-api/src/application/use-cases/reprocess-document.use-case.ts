@@ -16,6 +16,7 @@ import type {
   TracingPort
 } from '../../contracts/ports';
 import { TOKENS } from '../../contracts/tokens';
+import { toJobResponse } from '../mappers/job-response.mapper';
 import { AuditEventRecorder } from '../services/audit-event-recorder.service';
 import { DerivedJobOrchestrator } from '../services/derived-job-orchestrator.service';
 import type { ReprocessDocumentCommand } from '../commands/reprocess-document.command';
@@ -172,26 +173,4 @@ export class ReprocessDocumentUseCase {
       }
     );
   }
-}
-
-function toJobResponse(job: {
-  jobId: string;
-  documentId: string;
-  status: JobResponse['status'];
-  requestedMode: string;
-  pipelineVersion: string;
-  outputVersion: string;
-  reusedResult: boolean;
-  createdAt: Date;
-}): JobResponse {
-  return {
-    jobId: job.jobId,
-    documentId: job.documentId,
-    status: job.status,
-    requestedMode: job.requestedMode,
-    pipelineVersion: job.pipelineVersion,
-    outputVersion: job.outputVersion,
-    reusedResult: job.reusedResult,
-    createdAt: job.createdAt.toISOString()
-  };
 }
