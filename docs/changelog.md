@@ -4,6 +4,54 @@ Todas as mudancas relevantes deste repositorio devem ser registradas aqui.
 
 O formato segue uma adaptacao simples de `Keep a Changelog` e usa as tags de contexto dos commits como apoio para rastreabilidade.
 
+## [2026-04-01] - Consolidacao de duplicacoes transversais
+
+### Added
+
+- Helper HTTP compartilhado para envelope de erro e conversao de falhas da `orchestrator-api`.
+- Base compartilhada de `AuditEventRecorder` no `shared-kernel`, com politica de actor default configuravel por app.
+- `CompatibilityKey` centralizado no pacote `document-processing-domain`.
+- Novo pacote `shared-infrastructure` para adapters comuns de clock, RabbitMQ e sessao/transacao Mongo.
+- Mapper unico de `JobResponse` para os casos de uso da `orchestrator-api`.
+
+### Changed
+
+- `DocumentJobsController`, `OperationalJobsController` e `DeadLettersController` passaram a consumir a mesma regra de erro HTTP e de validacao de header.
+- API e worker deixaram de manter implementacoes proprias do recorder de auditoria, preservando apenas a politica local de actor default.
+- API e worker passaram a importar `CompatibilityKey` do dominio compartilhado, eliminando drift entre value objects locais.
+- Os adapters de infraestrutura duplicados nas apps viraram shims finos sobre o pacote compartilhado, com registro do novo workspace em manifests, `tsconfig` e `jest`.
+- `SubmitDocumentUseCase`, `ReprocessDocumentUseCase`, `ReplayDeadLetterUseCase` e `GetJobStatusUseCase` passaram a montar `JobResponse` pelo mesmo mapper.
+
+### Technical Notes
+
+- A validacao executada nesta entrega cobriu `corepack pnpm typecheck`, a suite E2E `document-jobs`, testes focados de contratos do recorder HTTP/auditoria e a resolucao dos specs reais de infraestrutura.
+- Mudancas locais nao relacionadas em `README.md`, `tooling/` e scripts de bootstrap permaneceram fora do escopo desta consolidacao.
+
+### Commit Contexts
+
+- `bug(orchestrator-http-errors): centralizar util http base`
+- `bug(orchestrator-http-errors): reapontar controllers restantes`
+- `feat(shared-audit-recorder): adicionar base compartilhada`
+- `feat(orchestrator-audit-recorder): reaproveitar recorder na api`
+- `feat(worker-audit-recorder): reaproveitar recorder no worker`
+- `feat(domain-compatibility-key): adicionar chave compartilhada`
+- `feat(shared-compatibility-key): migrar persistencia para pacote de dominio`
+- `bug(orchestrator-compatibility-key): alinhar imports dos testes da api`
+- `feat(orchestrator-job-response): centralizar mapper de JobResponse`
+- `feat(orchestrator-job-response): reapontar reprocess e replay`
+- `feat(compatibility-key-cleanup): remover value objects locais duplicados`
+- `feat(shared-infrastructure-core): adicionar adapters compartilhados`
+- `feat(shared-infrastructure-package): publicar pacote compartilhado`
+- `feat(shared-infrastructure-tooling): registrar pacote no workspace`
+- `feat(orchestrator-shared-infrastructure): registrar dependencia da api`
+- `feat(orchestrator-shared-infrastructure): reapontar clock e fila na api`
+- `feat(orchestrator-shared-infrastructure): reapontar mongo provider na api`
+- `feat(worker-shared-infrastructure): registrar dependencia do worker`
+- `feat(worker-shared-infrastructure): reapontar clock e fila no worker`
+- `feat(worker-shared-infrastructure): reapontar mongo provider no worker`
+- `bug(lockfile): alinhar workspace shared-infrastructure`
+- `docs(changelog): registrar consolidacao de duplicacoes`
+
 ## [2026-03-29] - Bootstrap Docker para desenvolvimento e producao
 
 ### Added
