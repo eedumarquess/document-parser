@@ -4,6 +4,47 @@ Todas as mudancas relevantes deste repositorio devem ser registradas aqui.
 
 O formato segue uma adaptacao simples de `Keep a Changelog` e usa as tags de contexto dos commits como apoio para rastreabilidade.
 
+## [2026-04-04] - Reavaliacao tecnica, gate de qualidade e lifecycle de runtime
+
+### Added
+
+- `RuntimeResourceRegistry` e helpers compartilhados em `packages/shared-infrastructure/src/runtime.ts` para parsing de env, fallback de observabilidade e ownership de recursos fechaveis.
+- `RuntimeResourceShutdownService` na API e no worker para fechar recursos reais de forma deterministica durante o shutdown do Nest.
+- `ProcessingJobListenerLifecycleService` no worker para subir e encerrar o listener RabbitMQ pelo lifecycle da aplicacao, sem bootstrap manual no `main.ts`.
+- Workflows de `GitHub Actions` para o caminho obrigatorio de PR e para os contratos reais de infraestrutura em job separado.
+- Relatorio tecnico `docs/relatorio-logica-duplicacoes.md` consolidando a reavaliacao das duplicacoes e prioridades atuais.
+
+### Changed
+
+- `eslint.config.mjs` passou a separar `TypeScript` tipado de `apps/packages` e scripts `Node` em `tooling/**/*.cjs`.
+- `jest.workspace.config.cjs` passou a resolver paths absolutos e regex de teste de forma segura para worktrees, inclusive quando o caminho contem segmentos ocultos.
+- `apps/orchestrator-api/src/config/runtime.config.ts` e `apps/document-processing-worker/src/config/runtime.config.ts` passaram a usar bootstrap compartilhado, incluindo registry de recursos reais.
+- A API agora sobe com `enableShutdownHooks()` e ownership explicito de publisher e Mongo provider reais.
+- O worker deixou de instanciar `RabbitMqProcessingJobListener` no `main.ts`; o listener passou a ser resolvido por DI e ativado apenas em runtime `real`.
+- `README.md` passou a documentar o gate obrigatorio de qualidade e o workflow separado para `test:contracts`.
+
+### Fixed
+
+- O backlog reproduzivel de `lint` no workspace limpo foi zerado, incluindo regras de imports, comparacoes de enum, regex com controle binario, asserts redundantes e scripts `.cjs`.
+- O root workspace voltou a executar `test:domain` corretamente a partir de um worktree dedicado, sem depender de globs quebrados por diretorios ocultos.
+- A responsabilidade por `close()` de conexoes reais deixou de ficar espalhada entre `main.ts` e bootstrap manual.
+
+### Technical Notes
+
+- A reavaliacao confirmou que os itens de coerencia de contexto do worker, `x-role`, outbox transacional e centralizacao de `CompatibilityKey` e `AuditEventRecorder` ja eram historicos resolvidos.
+- O workflow obrigatorio roda `corepack pnpm lint`, `corepack pnpm typecheck`, `corepack pnpm test:domain`, `corepack pnpm test:application` e `corepack pnpm test:e2e` em `Node 22`.
+- Os testes reais de infraestrutura continuam fora do caminho obrigatorio e seguem opt-in por `RUN_REAL_INFRA_TESTS=true`.
+- A validacao executada nesta entrega cobriu testes focados de runtime/lifecycle, `corepack pnpm typecheck` e a suite completa do gate obrigatorio antes do fechamento da branch.
+
+### Commit Contexts
+
+- `docs(reavaliacao-tecnica)`
+- `chore(lint-gate-reset)`
+- `feat(ci-github-actions)`
+- `feat(shared-runtime-lifecycle)`
+- `feat(worker-listener-lifecycle)`
+- `docs(changelog)`
+
 ## [2026-04-04] - OCR interno para PDF
 
 ### Added
