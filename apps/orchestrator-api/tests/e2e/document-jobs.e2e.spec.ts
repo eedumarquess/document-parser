@@ -7,8 +7,7 @@ import {
   DEFAULT_PIPELINE_VERSION,
   ExtractionWarning,
   JobStatus,
-  Role,
-  type ProcessingJobRequestedMessage
+  Role
 } from '@document-parser/shared-kernel';
 import { FixedClock, IncrementalIdGenerator, createPdfBuffer } from '@document-parser/testkit';
 import { OrchestratorApiModule } from '../../src/app.module';
@@ -27,14 +26,11 @@ import { InMemoryBinaryStorageAdapter } from '../../src/adapters/out/storage/in-
 import { SimplePageCounterAdapter } from '../../src/adapters/out/storage/simple-page-counter.adapter';
 
 class FailingJobPublisherAdapter extends InMemoryJobPublisherAdapter {
-  public override async publishRequested(_message: ProcessingJobRequestedMessage): Promise<void> {
+  public override async publishRequested(): Promise<void> {
     throw new Error('publisher offline');
   }
 
-  public override async publishRetry(
-    _message: ProcessingJobRequestedMessage,
-    _retryAttempt: number
-  ): Promise<void> {
+  public override async publishRetry(): Promise<void> {
     throw new Error('publisher offline');
   }
 }
