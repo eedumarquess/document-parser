@@ -1,14 +1,38 @@
 import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 
+const SHARED_IGNORES = [
+  '**/dist/**',
+  '**/coverage/**',
+  '**/node_modules/**',
+  '**/*.d.ts',
+  '**/*.map'
+];
+
+const NODE_SCRIPT_GLOBALS = {
+  __dirname: 'readonly',
+  console: 'readonly',
+  module: 'readonly',
+  process: 'readonly',
+  require: 'readonly'
+};
+
 export default tseslint.config(
   {
-    ignores: ['**/dist/**', '**/coverage/**', '**/node_modules/**', '**/*.js', '**/*.d.ts', '**/*.map']
+    ignores: SHARED_IGNORES
   },
-  js.configs.recommended,
+  {
+    files: ['tooling/**/*.cjs'],
+    ...js.configs.recommended,
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'commonjs',
+      globals: NODE_SCRIPT_GLOBALS
+    }
+  },
   {
     files: ['**/*.ts'],
-    extends: [...tseslint.configs.recommendedTypeChecked],
+    extends: [js.configs.recommended, ...tseslint.configs.recommendedTypeChecked],
     languageOptions: {
       parserOptions: {
         projectService: true,
