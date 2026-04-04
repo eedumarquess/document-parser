@@ -150,10 +150,6 @@ function runPnpm(args, cwd) {
   return runChild(spawnPnpm(args, cwd));
 }
 
-function runCommand(command, args, cwd) {
-  return runChild(spawnCommand(command, args, cwd));
-}
-
 function spawnPnpm(args, cwd) {
   return spawnCommand(getCorepackCommand(), ['pnpm', ...args], cwd);
 }
