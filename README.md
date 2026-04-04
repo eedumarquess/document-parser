@@ -279,9 +279,27 @@ O aceite do MVP deve validar:
 - erros padronizados para falhas funcionais e tecnicas
 - validacao por golden dataset versionado
 
+## Qualidade e CI
+
+O gate oficial do repositorio agora roda em `GitHub Actions` para `push` e `pull_request`, usando `Node 22` e `pnpm`.
+
+Checks obrigatorios do caminho principal:
+
+- `corepack pnpm lint`
+- `corepack pnpm typecheck`
+- `corepack pnpm test:domain`
+- `corepack pnpm test:application`
+- `corepack pnpm test:e2e`
+
+Os testes reais de infraestrutura permanecem separados do caminho obrigatorio. Para executa-los localmente ou no workflow dedicado:
+
+- defina `RUN_REAL_INFRA_TESTS=true`
+- rode `corepack pnpm test:contracts`
+
 ## Documentacao derivada
 
 - [Schemas futuros de persistencia](docs/database-schemas.md)
+- [Reavaliacao tecnica de duplicacoes e prioridades](docs/relatorio-logica-duplicacoes.md)
 - [Mapa de contexto DDD](docs/ddd/00-context-map.md)
 - [DDD de Ingestion](docs/ddd/01-ingestion.md)
 - [DDD de Document Processing](docs/ddd/02-document-processing.md)
