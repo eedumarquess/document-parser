@@ -43,23 +43,17 @@ class SuccessfulPublisher {
     this.messages.push(message);
   }
 
-  public async publishRetry(
-    _message: ProcessingJobRequestedMessage,
-    _retryAttempt: number
-  ): Promise<void> {
+  public async publishRetry(): Promise<void> {
     throw new Error('publishRetry should not be called in orchestrator dispatcher tests');
   }
 }
 
 class FailingPublisher {
-  public async publishRequested(_message: ProcessingJobRequestedMessage): Promise<void> {
+  public async publishRequested(): Promise<void> {
     throw new Error('publisher offline');
   }
 
-  public async publishRetry(
-    _message: ProcessingJobRequestedMessage,
-    _retryAttempt: number
-  ): Promise<void> {
+  public async publishRetry(): Promise<void> {
     throw new Error('publishRetry should not be called in orchestrator dispatcher tests');
   }
 }

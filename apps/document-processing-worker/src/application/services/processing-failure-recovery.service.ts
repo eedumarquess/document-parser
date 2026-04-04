@@ -5,7 +5,6 @@ import {
   createPendingAttempt,
   failAttempt,
   moveFailedAttemptToDeadLetter,
-  recordJobError,
   rescheduleJobForRetry,
   type JobAttemptRecord,
   type ProcessingJobRecord
@@ -13,7 +12,6 @@ import {
 import {
   DEFAULT_PROCESSING_QUEUE_NAME,
   ErrorCode,
-  JobStatus,
   RedactionPolicyService,
   RetentionPolicyService
 } from '@document-parser/shared-kernel';

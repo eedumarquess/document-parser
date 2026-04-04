@@ -6,6 +6,7 @@ import {
   JsonConsoleTracingAdapter,
   RedactionPolicyService
 } from '@document-parser/shared-kernel';
+import { RuntimeResourceRegistry } from '@document-parser/shared-infrastructure';
 import { DeadLettersController } from './adapters/in/http/dead-letters.controller';
 import { DocumentJobsController } from './adapters/in/http/document-jobs.controller';
 import { OperationalJobsController } from './adapters/in/http/operational-jobs.controller';
@@ -43,6 +44,7 @@ import {
 import { ReplayDeadLetterUseCase } from './application/use-cases/replay-dead-letter.use-case';
 import { ReprocessDocumentUseCase } from './application/use-cases/reprocess-document.use-case';
 import { SubmitDocumentUseCase } from './application/use-cases/submit-document.use-case';
+import { RuntimeResourceShutdownService } from './application/services/runtime-resource-shutdown.service';
 import type {
   AuditPort,
   AuthorizationPort,
@@ -97,6 +99,7 @@ export type OrchestratorProviderOverrides = Partial<{
   unitOfWork: UnitOfWorkPort;
   queuePublicationDispatcherRuntime: QueuePublicationDispatcherRuntime;
   serviceName: string;
+  runtimeResources: RuntimeResourceRegistry;
 }>;
 
 @Module({})
@@ -111,7 +114,9 @@ export class OrchestratorApiModule {
       metrics: overrides.metrics ?? new JsonConsoleMetricsAdapter(),
       tracing: overrides.tracing ?? new JsonConsoleTracingAdapter()
     });
+    const runtimeResources = overrides.runtimeResources ?? new RuntimeResourceRegistry();
     const providers: Provider[] = [
+      { provide: RuntimeResourceRegistry, useValue: runtimeResources },
       { provide: TOKENS.CLOCK, useValue: overrides.clock ?? new SystemClockAdapter() },
       { provide: TOKENS.ID_GENERATOR, useValue: overrides.idGenerator ?? new RandomIdGeneratorAdapter() },
       { provide: TOKENS.HASHING, useValue: overrides.hashing ?? new Sha256HashingAdapter() },
@@ -160,6 +165,7 @@ export class OrchestratorApiModule {
       RedactionPolicyService,
       AuditEventRecorder,
       ArtifactPreviewService,
+      RuntimeResourceShutdownService,
       QueuePublicationFailureHandler,
       QueuePublicationOutboxDispatcherService,
       DerivedJobOrchestrator,

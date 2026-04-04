@@ -7,7 +7,10 @@ const DEFAULT_ACTOR_ID = 'local-owner';
 const TRACE_ID_HEADER = 'x-trace-id';
 const ACTOR_ID_HEADER = 'x-actor-id';
 const ROLE_HEADER = 'x-role';
-const ACCEPTED_ROLES = [Role.OWNER, Role.OPERATOR] as const;
+const ACCEPTED_ROLES: Record<Role, true> = {
+  [Role.OWNER]: true,
+  [Role.OPERATOR]: true
+};
 
 export type HttpRequestContext = {
   actor: AuditActor;
@@ -35,13 +38,15 @@ const resolveRole = (rawRole: string | undefined): Role => {
     return Role.OWNER;
   }
 
-  if (rawRole === Role.OWNER || rawRole === Role.OPERATOR) {
+  if (isAcceptedRole(rawRole)) {
     return rawRole;
   }
 
   throw createValidationHttpException('Invalid x-role header', {
     header: ROLE_HEADER,
-    acceptedValues: [...ACCEPTED_ROLES],
+    acceptedValues: Object.keys(ACCEPTED_ROLES),
     receivedValue: rawRole
   });
 };
+
+const isAcceptedRole = (value: string): value is Role => Object.hasOwn(ACCEPTED_ROLES, value);

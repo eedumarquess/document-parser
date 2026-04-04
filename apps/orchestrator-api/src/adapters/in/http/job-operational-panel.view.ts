@@ -276,7 +276,7 @@ export function renderJobOperationalPanel(context: JobOperationalContextResponse
                 </article>
               `).join('')}
         </div>
-        ${(Object.entries(telemetryByService) as Array<[string, JobOperationalContextResponse['telemetryEvents']]>).map(([serviceName, events]) => `
+        ${Object.entries(telemetryByService).map(([serviceName, events]) => `
           <article class="card" style="margin-top: 14px;">
             <h3>${escapeHtml(serviceName)}</h3>
             <table>

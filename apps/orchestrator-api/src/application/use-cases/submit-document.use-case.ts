@@ -14,7 +14,6 @@ import {
   DEFAULT_PROCESSING_QUEUE_NAME,
   DEFAULT_OUTPUT_VERSION,
   DEFAULT_PIPELINE_VERSION,
-  JobStatus,
   RedactionPolicyService,
   type AuditActor,
   ValidationError

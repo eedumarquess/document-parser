@@ -496,7 +496,7 @@ function buildLogTelemetryEvent(
 ): TelemetryLogEventRecord {
   const data = entry.data === undefined
     ? undefined
-    : (redactionPolicy.redact(entry.data, { context: 'log' }) as Record<string, unknown>);
+    : redactionPolicy.redact(entry.data, { context: 'log' });
   const correlation = extractCorrelation(data);
 
   return {
@@ -565,7 +565,7 @@ function buildSpanTelemetryEvent(
 ): TelemetrySpanEventRecord {
   const attributes = input.attributes === undefined
     ? undefined
-    : (redactionPolicy.redact(input.attributes, { context: 'log' }) as Record<string, unknown>);
+    : redactionPolicy.redact(input.attributes, { context: 'log' });
   const correlation = extractCorrelation(attributes);
 
   return {

@@ -1,8 +1,17 @@
 import {
-  createOtlpHttpObservabilityAdapters,
-  parseOtlpHeaders
-} from '@document-parser/shared-kernel';
+  RuntimeResourceRegistry,
+  buildObservabilityOverrides,
+  createRegisteredMongoDatabaseProvider,
+  createRegisteredRabbitMqJobPublisher,
+  getRequiredEnv,
+  parseBooleanEnv,
+  parseNumberEnv,
+  parseOptionalNumberEnv,
+  resolveRuntimeMode,
+  type RuntimeMode
+} from '@document-parser/shared-infrastructure';
 import type { BinaryStoragePort, JobPublisherPort } from '../contracts/ports';
+import type { WorkerQueueListenerRuntime } from '../adapters/in/queue/processing-job-listener-lifecycle.service';
 import { InMemoryQueuePublicationOutboxRepository } from '../adapters/out/repositories/in-memory.repositories';
 import {
   MongoAuditRepositoryAdapter,
@@ -15,32 +24,35 @@ import {
   MongoQueuePublicationOutboxRepositoryAdapter,
   MongoTelemetryEventRepositoryAdapter
 } from '../adapters/out/repositories/mongodb.repositories';
-import { MongoDatabaseProvider, MongoSessionContext, MongoUnitOfWorkAdapter } from '../adapters/out/repositories/mongodb.provider';
+import { MongoSessionContext, MongoUnitOfWorkAdapter } from '../adapters/out/repositories/mongodb.provider';
 import { MinioBinaryStorageAdapter } from '../adapters/out/storage/minio-binary-storage.adapter';
-import { RabbitMqJobPublisherAdapter } from '../adapters/out/queue/rabbitmq-job-publisher.adapter';
 import type { WorkerProviderOverrides } from '../app.module';
 import { DEFAULT_QUEUE_PUBLICATION_DISPATCHER_RUNTIME } from '../application/services/queue-publication-outbox-dispatcher.service';
 
-type RuntimeMode = 'memory' | 'real';
-
 type WorkerRuntimeBootstrap = {
   mode: RuntimeMode;
-  queueName?: string;
-  rabbitMqUrl?: string;
+  listenerRuntime: WorkerQueueListenerRuntime;
   overrides: WorkerProviderOverrides;
+  runtimeResources: RuntimeResourceRegistry;
 };
 
 export function buildWorkerRuntimeBootstrapFromEnv(): WorkerRuntimeBootstrap {
   const serviceName = process.env.OTEL_SERVICE_NAME?.trim() || 'document-parser-worker';
   const mode = resolveRuntimeMode(
-    process.env.WORKER_RUNTIME_MODE ?? process.env.DOCUMENT_PARSER_RUNTIME_MODE ?? 'memory'
+    process.env.WORKER_RUNTIME_MODE ?? process.env.DOCUMENT_PARSER_RUNTIME_MODE ?? 'memory',
+    'worker'
   );
+  const runtimeResources = new RuntimeResourceRegistry();
 
   if (mode === 'memory') {
     return {
       mode,
+      listenerRuntime: { mode: 'memory' },
+      runtimeResources,
       overrides: {
         serviceName,
+        runtimeResources,
+        listenerRuntime: { mode: 'memory' },
         ...buildObservabilityOverrides(serviceName),
         storage: createNoopStorage(),
         publisher: createNoopPublisher(),
@@ -52,15 +64,22 @@ export function buildWorkerRuntimeBootstrapFromEnv(): WorkerRuntimeBootstrap {
 
   const queueName = getRequiredEnv('RABBITMQ_QUEUE_PROCESSING_REQUESTED');
   const rabbitMqUrl = getRequiredEnv('RABBITMQ_URL');
-  const mongoProvider = new MongoDatabaseProvider(getRequiredEnv('MONGODB_URI'));
+  const listenerRuntime: WorkerQueueListenerRuntime = {
+    mode: 'real',
+    queueName,
+    rabbitMqUrl
+  };
+  const mongoProvider = createRegisteredMongoDatabaseProvider(getRequiredEnv('MONGODB_URI'), runtimeResources);
   const sessionContext = new MongoSessionContext();
 
   return {
     mode,
-    queueName,
-    rabbitMqUrl,
+    listenerRuntime,
+    runtimeResources,
     overrides: {
       serviceName,
+      runtimeResources,
+      listenerRuntime,
       ...buildObservabilityOverrides(serviceName),
       storage: new MinioBinaryStorageAdapter({
         endPoint: getRequiredEnv('MINIO_ENDPOINT'),
@@ -78,7 +97,7 @@ export function buildWorkerRuntimeBootstrapFromEnv(): WorkerRuntimeBootstrap {
       queuePublicationOutbox: new MongoQueuePublicationOutboxRepositoryAdapter(mongoProvider, sessionContext),
       audit: new MongoAuditRepositoryAdapter(mongoProvider, sessionContext),
       telemetry: new MongoTelemetryEventRepositoryAdapter(mongoProvider, sessionContext),
-      publisher: new RabbitMqJobPublisherAdapter(rabbitMqUrl, queueName),
+      publisher: createRegisteredRabbitMqJobPublisher(rabbitMqUrl, queueName, runtimeResources),
       queuePublicationDispatcherRuntime: buildQueuePublicationDispatcherRuntimeFromEnv(),
       unitOfWork: new MongoUnitOfWorkAdapter(mongoProvider, sessionContext)
     }
@@ -104,69 +123,6 @@ function createNoopPublisher(): JobPublisherPort {
   };
 }
 
-function resolveRuntimeMode(value: string): RuntimeMode {
-  if (value === 'memory' || value === 'real') {
-    return value;
-  }
-
-  throw new Error(`Unsupported worker runtime mode: ${value}`);
-}
-
-function getRequiredEnv(name: string): string {
-  const value = process.env[name];
-  if (value === undefined || value.trim() === '') {
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
-
-  return value;
-}
-
-function parseNumberEnv(name: string): number {
-  const value = Number(getRequiredEnv(name));
-  if (Number.isNaN(value)) {
-    throw new Error(`Environment variable ${name} must be a number`);
-  }
-
-  return value;
-}
-
-function parseBooleanEnv(name: string): boolean {
-  const value = getRequiredEnv(name).toLowerCase();
-  if (value === 'true') {
-    return true;
-  }
-  if (value === 'false') {
-    return false;
-  }
-
-  throw new Error(`Environment variable ${name} must be "true" or "false"`);
-}
-
-function buildObservabilityOverrides(serviceName: string) {
-  const mode = (process.env.OBSERVABILITY_MODE ?? 'local').trim().toLowerCase();
-
-  if (mode === '' || mode === 'local') {
-    return {};
-  }
-
-  if (mode !== 'otlp') {
-    console.warn(`Unsupported OBSERVABILITY_MODE "${mode}". Falling back to local adapters.`);
-    return {};
-  }
-
-  const endpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim();
-  if (endpoint === undefined || endpoint === '') {
-    console.warn('Missing OTEL_EXPORTER_OTLP_ENDPOINT. Falling back to local adapters.');
-    return {};
-  }
-
-  return createOtlpHttpObservabilityAdapters({
-    endpoint,
-    serviceName: process.env.OTEL_SERVICE_NAME?.trim() || serviceName,
-    headers: parseOtlpHeaders(process.env.OTEL_EXPORTER_OTLP_HEADERS)
-  });
-}
-
 function buildQueuePublicationDispatcherRuntimeFromEnv() {
   return {
     pollIntervalMs: parseOptionalNumberEnv(
@@ -182,18 +138,4 @@ function buildQueuePublicationDispatcherRuntimeFromEnv() {
       DEFAULT_QUEUE_PUBLICATION_DISPATCHER_RUNTIME.leaseMs
     )
   };
-}
-
-function parseOptionalNumberEnv(name: string, defaultValue: number): number {
-  const rawValue = process.env[name];
-  if (rawValue === undefined || rawValue.trim() === '') {
-    return defaultValue;
-  }
-
-  const value = Number(rawValue);
-  if (Number.isNaN(value)) {
-    throw new Error(`Environment variable ${name} must be a number`);
-  }
-
-  return value;
 }

@@ -1,5 +1,5 @@
-import { RedactionPolicyService } from './redaction-policy.service';
-import { RetentionPolicyService } from './retention-policy.service';
+import type { RedactionPolicyService } from './redaction-policy.service';
+import type { RetentionPolicyService } from './retention-policy.service';
 import type { AuditActor, AuditEventRecord } from './types';
 
 export type AuditEventRecorderInput = {

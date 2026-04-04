@@ -7,7 +7,14 @@ import {
   RedactionPolicyService,
   RetentionPolicyService
 } from '@document-parser/shared-kernel';
+import { RuntimeResourceRegistry } from '@document-parser/shared-infrastructure';
 import { ProcessingJobConsumer } from './adapters/in/queue/processing-job.consumer';
+import {
+  ProcessingJobListenerLifecycleService,
+  createRabbitMqProcessingJobListener,
+  type ProcessingJobListenerFactory,
+  type WorkerQueueListenerRuntime
+} from './adapters/in/queue/processing-job-listener-lifecycle.service';
 import { RandomIdGeneratorAdapter } from './adapters/out/clock/random-id-generator.adapter';
 import { SystemClockAdapter } from './adapters/out/clock/system-clock.adapter';
 import { createDefaultExtractionPipeline } from './adapters/out/extraction/default-extraction.factory';
@@ -33,6 +40,7 @@ import {
   type QueuePublicationDispatcherRuntime
 } from './application/services/queue-publication-outbox-dispatcher.service';
 import { ProcessingSuccessPersister } from './application/services/processing-success-persister.service';
+import { RuntimeResourceShutdownService } from './application/services/runtime-resource-shutdown.service';
 import { ProcessJobMessageUseCase } from './application/use-cases/process-job-message.use-case';
 import type {
   AuditPort,
@@ -87,6 +95,9 @@ export type WorkerProviderOverrides = Partial<{
   extraction: ExtractionPipelinePort;
   queuePublicationDispatcherRuntime: QueuePublicationDispatcherRuntime;
   serviceName: string;
+  runtimeResources: RuntimeResourceRegistry;
+  listenerRuntime: WorkerQueueListenerRuntime;
+  listenerFactory: ProcessingJobListenerFactory;
 }>;
 
 @Module({})
@@ -100,7 +111,10 @@ export class DocumentProcessingWorkerModule {
       metrics: overrides.metrics ?? new JsonConsoleMetricsAdapter(),
       tracing: overrides.tracing ?? new JsonConsoleTracingAdapter()
     });
+    const runtimeResources = overrides.runtimeResources ?? new RuntimeResourceRegistry();
+    const listenerRuntime = overrides.listenerRuntime ?? { mode: 'memory' } satisfies WorkerQueueListenerRuntime;
     const providers: Provider[] = [
+      { provide: RuntimeResourceRegistry, useValue: runtimeResources },
       { provide: TOKENS.CLOCK, useValue: overrides.clock ?? new SystemClockAdapter() },
       { provide: TOKENS.ID_GENERATOR, useValue: overrides.idGenerator ?? new RandomIdGeneratorAdapter() },
       {
@@ -152,11 +166,17 @@ export class DocumentProcessingWorkerModule {
           } satisfies JobPublisherPort)
       },
       { provide: TOKENS.UNIT_OF_WORK, useValue: overrides.unitOfWork ?? new InMemoryUnitOfWork() },
+      { provide: TOKENS.QUEUE_LISTENER_RUNTIME, useValue: listenerRuntime },
+      {
+        provide: TOKENS.QUEUE_LISTENER_FACTORY,
+        useValue: overrides.listenerFactory ?? createRabbitMqProcessingJobListener
+      },
       ProcessingOutcomePolicy,
       RetryPolicyService,
       RetentionPolicyService,
       RedactionPolicyService,
       AuditEventRecorder,
+      RuntimeResourceShutdownService,
       QueuePublicationOutboxDispatcherService,
       ProcessingContextLoader,
       AttemptExecutionCoordinator,
@@ -177,7 +197,8 @@ export class DocumentProcessingWorkerModule {
         inject: [ProcessingOutcomePolicy, TOKENS.METRICS, TOKENS.TRACING]
       },
       ProcessJobMessageUseCase,
-      ProcessingJobConsumer
+      ProcessingJobConsumer,
+      ProcessingJobListenerLifecycleService
     ];
 
     return {

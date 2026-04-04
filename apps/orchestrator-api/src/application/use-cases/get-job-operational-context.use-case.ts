@@ -6,7 +6,6 @@ import {
   type TelemetryEventRecord
 } from '@document-parser/shared-kernel';
 import type {
-  ArtifactOperationalResponse,
   AuditEventOperationalResponse,
   DeadLetterOperationalResponse,
   JobAttemptOperationalResponse,
@@ -37,7 +36,6 @@ import type {
   AuditEventRecord,
   DeadLetterRecord,
   JobAttemptRecord,
-  PageArtifactRecord,
   ProcessingJobRecord,
   ProcessingResultRecord,
   QueuePublicationOutboxRecord
@@ -164,7 +162,7 @@ export class GetJobOperationalContextUseCase {
             traceId,
             data: this.redactionPolicy.redact(metadata, {
               context: 'log'
-            }) as Record<string, unknown>,
+            }),
             recordedAt: now
           });
           await this.metrics.increment({
@@ -222,7 +220,7 @@ export class GetJobOperationalContextUseCase {
               {
                 context: 'log'
               }
-            ) as Record<string, unknown>,
+            ),
             recordedAt: this.clock.now()
           });
           throw error;

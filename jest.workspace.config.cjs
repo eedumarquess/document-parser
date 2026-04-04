@@ -1,3 +1,7 @@
+const path = require('node:path');
+
+const repoRoot = __dirname;
+
 const commonProjectConfig = {
   transform: {
     '^.+\\.ts$': [
@@ -12,11 +16,11 @@ const commonProjectConfig = {
   collectCoverageFrom: ['src/**/*.ts'],
   moduleNameMapper: {
     '^@document-parser/document-processing-domain$':
-      '<rootDir>/../../packages/document-processing-domain/src',
+      path.join(repoRoot, 'packages', 'document-processing-domain', 'src'),
     '^@document-parser/shared-infrastructure$':
-      '<rootDir>/../../packages/shared-infrastructure/src',
-    '^@document-parser/shared-kernel$': '<rootDir>/../../packages/shared-kernel/src',
-    '^@document-parser/testkit$': '<rootDir>/../../packages/testkit/src'
+      path.join(repoRoot, 'packages', 'shared-infrastructure', 'src'),
+    '^@document-parser/shared-kernel$': path.join(repoRoot, 'packages', 'shared-kernel', 'src'),
+    '^@document-parser/testkit$': path.join(repoRoot, 'packages', 'testkit', 'src')
   }
 };
 
@@ -25,52 +29,52 @@ module.exports = {
     {
       ...commonProjectConfig,
       displayName: 'orchestrator-domain',
-      rootDir: '<rootDir>/apps/orchestrator-api',
-      testMatch: ['<rootDir>/tests/domain/**/*.spec.ts']
+      rootDir: path.join(repoRoot, 'apps', 'orchestrator-api'),
+      testRegex: ['tests/domain/.+\\.spec\\.ts$']
     },
     {
       ...commonProjectConfig,
       displayName: 'orchestrator-application',
-      rootDir: '<rootDir>/apps/orchestrator-api',
-      testMatch: ['<rootDir>/tests/application/**/*.spec.ts']
+      rootDir: path.join(repoRoot, 'apps', 'orchestrator-api'),
+      testRegex: ['tests/application/.+\\.spec\\.ts$']
     },
     {
       ...commonProjectConfig,
       displayName: 'orchestrator-contracts',
-      rootDir: '<rootDir>/apps/orchestrator-api',
-      testMatch: ['<rootDir>/tests/contracts/**/*.spec.ts'],
+      rootDir: path.join(repoRoot, 'apps', 'orchestrator-api'),
+      testRegex: ['tests/contracts/.+\\.spec\\.ts$'],
       slowTestThreshold: 60
     },
     {
       ...commonProjectConfig,
       displayName: 'orchestrator-e2e',
-      rootDir: '<rootDir>/apps/orchestrator-api',
-      testMatch: ['<rootDir>/tests/e2e/**/*.spec.ts']
+      rootDir: path.join(repoRoot, 'apps', 'orchestrator-api'),
+      testRegex: ['tests/e2e/.+\\.spec\\.ts$']
     },
     {
       ...commonProjectConfig,
       displayName: 'worker-domain',
-      rootDir: '<rootDir>/apps/document-processing-worker',
-      testMatch: ['<rootDir>/tests/domain/**/*.spec.ts']
+      rootDir: path.join(repoRoot, 'apps', 'document-processing-worker'),
+      testRegex: ['tests/domain/.+\\.spec\\.ts$']
     },
     {
       ...commonProjectConfig,
       displayName: 'worker-application',
-      rootDir: '<rootDir>/apps/document-processing-worker',
-      testMatch: ['<rootDir>/tests/application/**/*.spec.ts']
+      rootDir: path.join(repoRoot, 'apps', 'document-processing-worker'),
+      testRegex: ['tests/application/.+\\.spec\\.ts$']
     },
     {
       ...commonProjectConfig,
       displayName: 'worker-contracts',
-      rootDir: '<rootDir>/apps/document-processing-worker',
-      testMatch: ['<rootDir>/tests/contracts/**/*.spec.ts'],
+      rootDir: path.join(repoRoot, 'apps', 'document-processing-worker'),
+      testRegex: ['tests/contracts/.+\\.spec\\.ts$'],
       slowTestThreshold: 60
     },
     {
       ...commonProjectConfig,
       displayName: 'worker-e2e',
-      rootDir: '<rootDir>/apps/document-processing-worker',
-      testMatch: ['<rootDir>/tests/e2e/**/*.spec.ts']
+      rootDir: path.join(repoRoot, 'apps', 'document-processing-worker'),
+      testRegex: ['tests/e2e/.+\\.spec\\.ts$']
     }
   ]
 };
