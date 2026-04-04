@@ -26,8 +26,8 @@ import {
   InMemoryUnitOfWork
 } from './adapters/out/repositories/in-memory.repositories';
 import { InMemoryBinaryStorageAdapter } from './adapters/out/storage/in-memory-binary-storage.adapter';
+import { PdfInfoPageCounterAdapter } from './adapters/out/storage/pdfinfo-page-counter.adapter';
 import { Sha256HashingAdapter } from './adapters/out/storage/sha256-hashing.adapter';
-import { SimplePageCounterAdapter } from './adapters/out/storage/simple-page-counter.adapter';
 import { GetJobStatusUseCase } from './application/use-cases/get-job-status.use-case';
 import { GetJobOperationalContextUseCase } from './application/use-cases/get-job-operational-context.use-case';
 import { GetProcessingResultUseCase } from './application/use-cases/get-processing-result.use-case';
@@ -115,7 +115,7 @@ export class OrchestratorApiModule {
       { provide: TOKENS.CLOCK, useValue: overrides.clock ?? new SystemClockAdapter() },
       { provide: TOKENS.ID_GENERATOR, useValue: overrides.idGenerator ?? new RandomIdGeneratorAdapter() },
       { provide: TOKENS.HASHING, useValue: overrides.hashing ?? new Sha256HashingAdapter() },
-      { provide: TOKENS.PAGE_COUNTER, useValue: overrides.pageCounter ?? new SimplePageCounterAdapter() },
+      { provide: TOKENS.PAGE_COUNTER, useValue: overrides.pageCounter ?? new PdfInfoPageCounterAdapter() },
       { provide: TOKENS.BINARY_STORAGE, useValue: overrides.storage ?? new InMemoryBinaryStorageAdapter() },
       { provide: TOKENS.DOCUMENT_REPOSITORY, useValue: overrides.documents ?? new InMemoryDocumentRepository() },
       { provide: TOKENS.JOB_REPOSITORY, useValue: overrides.jobs ?? new InMemoryProcessingJobRepository() },
