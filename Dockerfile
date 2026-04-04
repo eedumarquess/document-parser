@@ -4,6 +4,10 @@ ENV PNPM_HOME=/pnpm
 ENV PNPM_STORE_DIR=/pnpm/store
 ENV PATH="${PNPM_HOME}:${PATH}"
 
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends poppler-utils tesseract-ocr tesseract-ocr-por \
+  && rm -rf /var/lib/apt/lists/*
+
 RUN corepack enable \
   && pnpm config set store-dir "${PNPM_STORE_DIR}"
 
@@ -44,7 +48,7 @@ COPY packages/testkit/package.json ./packages/testkit/package.json
 
 RUN pnpm install --prod --frozen-lockfile
 
-FROM node:22-bookworm-slim AS prod
+FROM base AS prod
 
 ENV NODE_ENV=production
 

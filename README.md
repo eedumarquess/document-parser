@@ -139,6 +139,14 @@ Variaveis opcionais de LLM remoto no worker:
 - `HUGGINGFACE_MODEL`
 - `HUGGINGFACE_BASE_URL`
 
+### OCR interno para PDF
+
+- `application/pdf` usa `pdfinfo` para contagem de paginas na API
+- o worker usa `pdftoppm` para renderizar cada pagina em `PNG`
+- o worker usa `tesseract` com idioma `por` para OCR local
+- variaveis de runtime: `PDFINFO_BINARY`, `PDFTOPPM_BINARY`, `TESSERACT_BINARY`, `TESSERACT_LANGUAGE`
+- para rodar o smoke test nativo localmente, use `RUN_NATIVE_PDF_TESTS=true`
+
 ### Docker para desenvolvimento
 
 O repositorio agora inclui `Dockerfile` multi-stage e `docker-compose.dev.yml` para desenvolvimento em runtime `real`, reaproveitando infra externa ja existente.

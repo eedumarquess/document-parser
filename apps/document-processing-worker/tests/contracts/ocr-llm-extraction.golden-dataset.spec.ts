@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { AttemptStatus, FallbackReason, JobStatus, Role } from '@document-parser/shared-kernel';
 import { createDefaultExtractionPipeline } from '../../src/adapters/out/extraction/default-extraction.factory';
 import { ProcessingOutcomePolicy } from '../../src/domain/policies/processing-outcome.policy';
@@ -47,6 +49,9 @@ const baseInput = {
   }
 };
 
+const nativePdfSmokeTest =
+  process.env.RUN_NATIVE_PDF_TESTS === 'true' ? it : it.skip;
+
 describe('OCR/LLM extraction golden dataset', () => {
   const pipeline = createDefaultExtractionPipeline(new ProcessingOutcomePolicy());
 
@@ -81,5 +86,31 @@ describe('OCR/LLM extraction golden dataset', () => {
     expect(outcome.status).toBe(expectedStatus);
     expect(outcome.payload).toBe(expectedPayload);
     expect(outcome.fallbackReason).toBe(expectedFallbackReason);
+  });
+
+  nativePdfSmokeTest('processes a real one-page PDF through the native OCR pipeline', async () => {
+    const fixturePath = join(
+      process.cwd(),
+      'packages',
+      'testkit',
+      'fixtures',
+      'pdf',
+      'clinical-one-page.pdf'
+    );
+    const original = await readFile(fixturePath);
+    const outcome = await pipeline.extract({
+      ...baseInput,
+      document: {
+        ...baseInput.document,
+        originalFileName: 'clinical-one-page.pdf',
+        mimeType: 'application/pdf',
+        fileSizeBytes: original.byteLength,
+        pageCount: 1
+      },
+      original
+    });
+
+    expect(outcome.artifacts.filter((artifact) => artifact.artifactType === 'OCR_JSON')).toHaveLength(1);
+    expect(outcome.payload).not.toContain('FlateDecode');
   });
 });
