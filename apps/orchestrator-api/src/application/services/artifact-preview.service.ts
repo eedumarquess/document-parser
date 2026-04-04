@@ -17,6 +17,27 @@ const PDF_STRUCTURAL_MARKERS = [
   /\bstream\b[\s\S]{0,200}\b(?:endobj|endstream)\b/i
 ];
 
+type PreviewStrategy = {
+  extract(metadata: Record<string, unknown>): unknown;
+  requiresReadableText?: boolean;
+};
+
+const PREVIEW_SOURCE_STRATEGIES: Record<string, PreviewStrategy> = {
+  [ArtifactType.OCR_JSON]: {
+    extract: (metadata) => metadata.rawText ?? metadata.rawPayload,
+    requiresReadableText: true
+  },
+  [ArtifactType.MASKED_TEXT]: {
+    extract: (metadata) => metadata.maskedText
+  },
+  [ArtifactType.LLM_PROMPT]: {
+    extract: (metadata) => metadata.promptText
+  },
+  [ArtifactType.LLM_RESPONSE]: {
+    extract: (metadata) => metadata.resolvedText ?? metadata.responseText
+  }
+};
+
 @Injectable()
 export class ArtifactPreviewService {
   public constructor(private readonly redactionPolicy: RedactionPolicyService) {}
@@ -40,15 +61,15 @@ export class ArtifactPreviewService {
   }
 
   private buildPreviewText(artifact: PageArtifactRecord): string | undefined {
-    const previewSource = this.extractPreviewSource(artifact);
-    if (previewSource === undefined) {
+    const preview = this.extractPreview(artifact);
+    if (preview === undefined) {
       return undefined;
     }
-    if (artifact.artifactType === ArtifactType.OCR_JSON && !this.isReadableText(previewSource)) {
+    if (preview.requiresReadableText && !this.isReadableText(preview.previewSource)) {
       return undefined;
     }
 
-    const masked = this.redactionPolicy.maskTextPreview(previewSource);
+    const masked = this.redactionPolicy.maskTextPreview(preview.previewSource);
     const normalized = masked.replaceAll(/\s+/g, ' ').trim();
     if (normalized === '') {
       return undefined;
@@ -75,24 +96,28 @@ export class ArtifactPreviewService {
 
     return this.redactionPolicy.sanitizeMetadata(metadata, {
       context: 'artifact'
-    }) as Record<string, unknown>;
+    });
   }
 
-  private extractPreviewSource(artifact: PageArtifactRecord): string | undefined {
+  private extractPreview(
+    artifact: PageArtifactRecord
+  ): { previewSource: string; requiresReadableText: boolean } | undefined {
     const metadata = artifact.metadata ?? {};
 
-    switch (artifact.artifactType) {
-      case ArtifactType.OCR_JSON:
-        return this.serializePreviewCandidate(metadata.rawText ?? metadata.rawPayload);
-      case ArtifactType.MASKED_TEXT:
-        return this.serializePreviewCandidate(metadata.maskedText);
-      case ArtifactType.LLM_PROMPT:
-        return this.serializePreviewCandidate(metadata.promptText);
-      case ArtifactType.LLM_RESPONSE:
-        return this.serializePreviewCandidate(metadata.resolvedText ?? metadata.responseText);
-      default:
-        return undefined;
+    const strategy = PREVIEW_SOURCE_STRATEGIES[artifact.artifactType];
+    if (strategy === undefined) {
+      return undefined;
     }
+
+    const previewSource = this.serializePreviewCandidate(strategy.extract(metadata));
+    if (previewSource === undefined) {
+      return undefined;
+    }
+
+    return {
+      previewSource,
+      requiresReadableText: strategy.requiresReadableText ?? false
+    };
   }
 
   private serializePreviewCandidate(candidate: unknown): string | undefined {
@@ -111,11 +136,22 @@ export class ArtifactPreviewService {
   }
 
   private isReadableText(candidate: string): boolean {
-    if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(candidate)) {
+    if (this.hasBinaryControlCharacters(candidate)) {
       return false;
     }
 
     return !this.looksLikePdfStructure(candidate);
+  }
+
+  private hasBinaryControlCharacters(candidate: string): boolean {
+    for (const character of candidate) {
+      const code = character.charCodeAt(0);
+      if ((code >= 0 && code <= 8) || code === 11 || code === 12 || (code >= 14 && code <= 31)) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   private looksLikePdfStructure(candidate: string): boolean {
