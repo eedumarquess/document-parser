@@ -8,8 +8,8 @@ const baseInput = {
   document: {
     documentId: 'doc-1',
     hash: 'sha256:doc',
-    originalFileName: 'sample.pdf',
-    mimeType: 'application/pdf',
+    originalFileName: 'sample.txt',
+    mimeType: 'text/plain',
     fileSizeBytes: 10,
     pageCount: 1,
     sourceType: 'MULTIPART' as const,

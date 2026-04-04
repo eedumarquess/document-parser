@@ -22,13 +22,15 @@ export class OcrLlmExtractionPipelineAdapter implements ExtractionPipelinePort {
   ) {}
 
   public async extract(input: Parameters<ExtractionPipelinePort['extract']>[0]) {
-    const originalText = input.original.toString('utf8');
+    if (input.document.mimeType !== 'application/pdf') {
+      const originalText = input.original.toString('utf8');
 
-    if (originalText.includes('[[TRANSIENT_FAILURE]]')) {
-      throw new TransientFailureError('Deterministic extraction pipeline transient failure');
-    }
-    if (originalText.includes('[[FATAL_FAILURE]]')) {
-      throw new FatalFailureError('Simulated fatal failure');
+      if (originalText.includes('[[TRANSIENT_FAILURE]]')) {
+        throw new TransientFailureError('Deterministic extraction pipeline transient failure');
+      }
+      if (originalText.includes('[[FATAL_FAILURE]]')) {
+        throw new FatalFailureError('Simulated fatal failure');
+      }
     }
 
     const extractedPages = await this.recordStage({

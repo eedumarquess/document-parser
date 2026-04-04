@@ -169,7 +169,9 @@ describeRealInfra('Document processing worker real infrastructure', () => {
       documentId: 'doc-worker-success',
       jobId: 'job-worker-success',
       attemptId: 'attempt-worker-success',
-      buffer: Buffer.from('%PDF-1.4\n/Type /Page\nPaciente consciente. [[AMBIGUOUS_CHECKBOX:febre:checked]]')
+      mimeType: 'text/plain',
+      originalFileName: 'sample.txt',
+      buffer: Buffer.from('Paciente consciente. [[AMBIGUOUS_CHECKBOX:febre:checked]]')
     });
 
     await publisher.publishRequested(seed.message);
@@ -207,6 +209,8 @@ describeRealInfra('Document processing worker real infrastructure', () => {
       documentId: 'doc-worker-retry',
       jobId: 'job-worker-retry',
       attemptId: 'attempt-worker-retry',
+      mimeType: 'text/plain',
+      originalFileName: 'sample.txt',
       buffer: Buffer.from('[[TRANSIENT_FAILURE]]')
     });
 
@@ -252,6 +256,8 @@ describeRealInfra('Document processing worker real infrastructure', () => {
       documentId: 'doc-worker-dlq',
       jobId: 'job-worker-dlq',
       attemptId: 'attempt-worker-dlq',
+      mimeType: 'text/plain',
+      originalFileName: 'sample.txt',
       buffer: Buffer.from('[[FATAL_FAILURE]]')
     });
 
@@ -365,11 +371,23 @@ describeRealInfra('Document processing worker real infrastructure', () => {
     attemptId: string;
     buffer: Buffer;
     attemptNumber?: number;
+    mimeType?: string;
+    originalFileName?: string;
+    pageCount?: number;
   }) {
+    const mimeType = input.mimeType ?? 'text/plain';
+    const originalFileName =
+      input.originalFileName ?? (mimeType === 'application/pdf' ? 'sample.pdf' : 'sample.txt');
+    const pageCount =
+      input.pageCount ??
+      (mimeType === 'application/pdf'
+        ? 1
+        : Math.max(1, input.buffer.toString('utf8').split('[[PAGE_BREAK]]').length));
+
     await ensureBucket('documents');
-    const objectKey = `original/${input.documentId}/sample.pdf`;
+    const objectKey = `original/${input.documentId}/${originalFileName}`;
     await minioClient.putObject('documents', objectKey, input.buffer, input.buffer.byteLength, {
-      'Content-Type': 'application/pdf'
+      'Content-Type': mimeType
     });
 
     const now = new Date('2026-03-25T12:00:00.000Z');
@@ -386,10 +404,10 @@ describeRealInfra('Document processing worker real infrastructure', () => {
     await documents.save({
       documentId: input.documentId,
       hash: `sha256:${input.documentId}`,
-      originalFileName: 'sample.pdf',
-      mimeType: 'application/pdf',
+      originalFileName,
+      mimeType,
       fileSizeBytes: input.buffer.byteLength,
-      pageCount: Math.max(1, input.buffer.toString('utf8').split('[[PAGE_BREAK]]').length),
+      pageCount,
       sourceType: 'MULTIPART',
       storageReference: {
         bucket: 'documents',

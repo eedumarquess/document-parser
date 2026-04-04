@@ -51,14 +51,14 @@ describe('DocumentProcessingWorkerModule e2e', () => {
 
     const storageReference = await storage.storeOriginal({
       documentId: 'doc-1',
-      originalName: 'sample.pdf',
-      buffer: Buffer.from('%PDF-1.4\n/Type /Page\nworker flow')
+      originalName: 'sample.txt',
+      buffer: Buffer.from('worker flow')
     });
     await documents.save({
       documentId: 'doc-1',
       hash: 'sha256:doc',
-      originalFileName: 'sample.pdf',
-      mimeType: 'application/pdf',
+      originalFileName: 'sample.txt',
+      mimeType: 'text/plain',
       fileSizeBytes: 10,
       pageCount: 1,
       sourceType: 'MULTIPART',

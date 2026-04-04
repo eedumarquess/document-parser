@@ -75,6 +75,9 @@ type WorkerContextOptions = {
   persistDocument?: boolean;
   persistJob?: boolean;
   persistAttempt?: boolean;
+  mimeType?: string;
+  originalFileName?: string;
+  pageCount?: number;
 };
 
 const createWorkerContext = async (buffer: Buffer, optionsOrAttemptNumber: WorkerContextOptions | number = 1) => {
@@ -100,11 +103,18 @@ const createWorkerContext = async (buffer: Buffer, optionsOrAttemptNumber: Worke
   const unitOfWork = new InMemoryUnitOfWork();
   const retentionPolicy = new RetentionPolicyService();
   const redactionPolicy = new RedactionPolicyService();
-  const pageCount = Math.max(1, buffer.toString('utf8').split('[[PAGE_BREAK]]').length);
+  const mimeType = options.mimeType ?? 'text/plain';
+  const originalFileName =
+    options.originalFileName ?? (mimeType === 'application/pdf' ? 'sample.pdf' : 'sample.txt');
+  const pageCount =
+    options.pageCount ??
+    (mimeType === 'application/pdf'
+      ? 1
+      : Math.max(1, buffer.toString('utf8').split('[[PAGE_BREAK]]').length));
 
   const storageReference = await storage.storeOriginal({
     documentId,
-    originalName: 'sample.pdf',
+    originalName: originalFileName,
     buffer
   });
 
@@ -112,8 +122,8 @@ const createWorkerContext = async (buffer: Buffer, optionsOrAttemptNumber: Worke
     await documents.save({
       documentId,
       hash: 'sha256:doc',
-      originalFileName: 'sample.pdf',
-      mimeType: 'application/pdf',
+      originalFileName,
+      mimeType,
       fileSizeBytes: buffer.byteLength,
       pageCount,
       sourceType: 'MULTIPART',
@@ -225,7 +235,7 @@ const executeMessage = async (context: Awaited<ReturnType<typeof createWorkerCon
 
 describe('ProcessJobMessageUseCase', () => {
   it('processes a clean OCR document without fallback', async () => {
-    const context = await createWorkerContext(Buffer.from('%PDF-1.4\n/Type /Page\nconteudo extraido'));
+    const context = await createWorkerContext(Buffer.from('conteudo extraido'));
 
     await executeMessage(context);
 
@@ -242,7 +252,7 @@ describe('ProcessJobMessageUseCase', () => {
 
   it('executes target-level fallback and persists masked text, prompt and response', async () => {
     const context = await createWorkerContext(
-      Buffer.from('%PDF-1.4\n/Type /Page\nPaciente consciente. [[AMBIGUOUS_CHECKBOX:febre:checked]]')
+      Buffer.from('Paciente consciente. [[AMBIGUOUS_CHECKBOX:febre:checked]]')
     );
 
     await executeMessage(context);
@@ -262,7 +272,7 @@ describe('ProcessJobMessageUseCase', () => {
 
   it('restores masked placeholders before consolidating the final payload', async () => {
     const context = await createWorkerContext(
-      Buffer.from('%PDF-1.4\n/Type /Page\n[[CRITICAL_MISSING:cpf:123.456.789-00]]')
+      Buffer.from('[[CRITICAL_MISSING:cpf:123.456.789-00]]')
     );
 
     await executeMessage(context);
