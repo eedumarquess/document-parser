@@ -4,6 +4,43 @@ Todas as mudancas relevantes deste repositorio devem ser registradas aqui.
 
 O formato segue uma adaptacao simples de `Keep a Changelog` e usa as tags de contexto dos commits como apoio para rastreabilidade.
 
+## [2026-04-04] - OCR interno para PDF
+
+### Added
+
+- Wrappers nativos em `packages/shared-infrastructure` para `pdfinfo`, `pdftoppm` e `tesseract`, com workspace temporario para inspecao/renderizacao/OCR de `PDF`.
+- `PdfInfoPageCounterAdapter` na `orchestrator-api` e pipeline nativo de `PDF` no worker com renderer por pagina, OCR local e adapters compostos para manter `JPEG` e `PNG` fora deste escopo.
+- Guards no worker e na leitura operacional para bloquear fallback textual e `previewText` quando o payload parecer lixo estrutural de `PDF`.
+- Fixture real `packages/testkit/fixtures/pdf/clinical-one-page.pdf` e smoke test gated por `RUN_NATIVE_PDF_TESTS=true`.
+
+### Changed
+
+- A API deixou de contar paginas de `PDF` por regex em `utf8` e passou a usar `pdfinfo`.
+- O worker deixou de converter `PDF` bruto para `string` no fluxo nativo e passou a usar `pdftoppm` + `tesseract`, preservando falha explicita quando os binarios nativos nao estiverem disponiveis.
+- `Dockerfile`, `README.md`, `.env.example` e `.env.docker.dev.example` passaram a documentar e empacotar `PDFINFO_BINARY`, `PDFTOPPM_BINARY`, `TESSERACT_BINARY` e `TESSERACT_LANGUAGE`.
+
+### Fixed
+
+- Falhas fatais do caminho nativo nao expõem mais metadados internos no payload HTTP da API.
+- O fallback `LLM` nao tenta mais recuperar paginas inteiras a partir de bytes/estrutura de `PDF`, e a visao operacional nao replica lixo binario em `previewText`.
+- O fixture real de smoke passou a ser um `PDF` valido de uma pagina, confirmavel por `pdfinfo`.
+
+### Technical Notes
+
+- A validacao da branch mergeada em `master` cobriu `corepack pnpm test` e `corepack pnpm exec tsc -b packages/shared-kernel/tsconfig.json packages/shared-infrastructure/tsconfig.json apps/orchestrator-api/tsconfig.json apps/document-processing-worker/tsconfig.json --pretty false`.
+- O smoke nativo real continua opt-in via `RUN_NATIVE_PDF_TESTS=true`; neste host ele nao foi executado porque `tesseract` nao esta instalado.
+- O `docker build --target prod` nao foi concluido neste host porque o daemon local do Docker nao estava disponivel, mas o `Dockerfile` final passou a herdar do stage `base` para preservar os binarios nativos na imagem de producao.
+
+### Commit Contexts
+
+- `feat(orchestrator): count pdf pages with pdfinfo`
+- `fix(orchestrator): preserve mime validation before pdfinfo`
+- `fix(orchestrator): hide fatal error metadata in http responses`
+- `feat(worker): add internal pdf rendering and tesseract ocr`
+- `fix(worker): keep native pdf path binary-safe`
+- `fix(pdf): block binary fallback and unsafe artifact preview`
+- `chore(pdf-ocr): package native runtime and smoke tests`
+
 ## [2026-04-01] - Consolidacao de duplicacoes transversais
 
 ### Added
