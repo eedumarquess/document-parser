@@ -19,4 +19,22 @@ describe('PdfInfoPageCounterAdapter contract', () => {
 
     expect(pdfTools.inspect).toHaveBeenCalledTimes(1);
   });
+
+  it('does not invoke pdfinfo for non-PDF files and keeps the default page count', async () => {
+    const pdfTools = {
+      inspect: jest.fn().mockResolvedValue({ pageCount: 99 })
+    };
+    const adapter = new PdfInfoPageCounterAdapter(pdfTools as never);
+
+    await expect(
+      adapter.countPages(
+        buildUploadedFile({
+          mimeType: 'image/png',
+          buffer: Buffer.from('not a real pdf')
+        })
+      )
+    ).resolves.toBe(1);
+
+    expect(pdfTools.inspect).not.toHaveBeenCalled();
+  });
 });

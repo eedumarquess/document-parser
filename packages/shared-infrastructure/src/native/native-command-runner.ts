@@ -12,10 +12,22 @@ export class NativeCommandRunner {
         maxBuffer: 16 * 1024 * 1024
       });
     } catch (error) {
+      const failure = error as {
+        message?: unknown;
+        code?: unknown;
+        signal?: unknown;
+        stdout?: unknown;
+        stderr?: unknown;
+      };
+
       throw new FatalFailureError('Native PDF/OCR command failed', {
         command,
         args,
-        cause: error instanceof Error ? error.message : 'unknown'
+        code: failure.code,
+        signal: failure.signal,
+        stdout: failure.stdout,
+        stderr: failure.stderr,
+        cause: typeof failure.message === 'string' ? failure.message : 'unknown'
       });
     }
   }

@@ -8,6 +8,10 @@ export class PdfInfoPageCounterAdapter implements PageCounterPort {
   public constructor(private readonly pdfTools = new PopplerPdfTools()) {}
 
   public async countPages(file: UploadedFile): Promise<number> {
+    if (file.mimeType !== 'application/pdf') {
+      return 1;
+    }
+
     const { pageCount } = await this.pdfTools.inspect(file.buffer);
     return Math.max(1, pageCount);
   }

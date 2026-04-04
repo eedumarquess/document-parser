@@ -24,6 +24,7 @@ import {
   InMemoryTelemetryEventRepository
 } from '../../src/adapters/out/repositories/in-memory.repositories';
 import { InMemoryBinaryStorageAdapter } from '../../src/adapters/out/storage/in-memory-binary-storage.adapter';
+import { SimplePageCounterAdapter } from '../../src/adapters/out/storage/simple-page-counter.adapter';
 
 class FailingJobPublisherAdapter extends InMemoryJobPublisherAdapter {
   public override async publishRequested(_message: ProcessingJobRequestedMessage): Promise<void> {
@@ -203,6 +204,7 @@ describe('Document jobs e2e', () => {
           clock,
           idGenerator,
           storage,
+          pageCounter: new SimplePageCounterAdapter(),
           documents,
           jobs,
           attempts,
@@ -336,6 +338,7 @@ describe('Document jobs e2e', () => {
             clock,
             idGenerator,
             storage: new InMemoryBinaryStorageAdapter(),
+            pageCounter: new SimplePageCounterAdapter(),
             documents: new InMemoryDocumentRepository(),
             jobs: failingAppJobs,
             attempts: new InMemoryJobAttemptRepository(),
