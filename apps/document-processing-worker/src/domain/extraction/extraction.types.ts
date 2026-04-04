@@ -19,6 +19,7 @@ export type RenderedPage = {
   pageNumber: number;
   mimeType: string;
   sourceText: string;
+  imageBytes?: Buffer;
 };
 
 export type OcrPageResult = {

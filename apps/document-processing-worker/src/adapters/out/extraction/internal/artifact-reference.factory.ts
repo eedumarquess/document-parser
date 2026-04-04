@@ -3,6 +3,8 @@ import type { FallbackTarget, RenderedPage } from '../../../../domain/extraction
 
 export class ArtifactReferenceFactory {
   public buildRenderArtifact(jobId: string, page: RenderedPage): ArtifactReference {
+    const usesNativePdfRendering = page.imageBytes !== undefined;
+
     return {
       artifactId: `artifact-render-${jobId}-page-${page.pageNumber}`,
       artifactType: ArtifactType.RENDERED_IMAGE,
@@ -11,8 +13,9 @@ export class ArtifactReferenceFactory {
       mimeType: page.mimeType,
       pageNumber: page.pageNumber,
       metadata: {
-        renderedFrom: 'default-page-renderer',
-        pageSourceLength: page.sourceText.length
+        renderedFrom: usesNativePdfRendering ? 'native-pdf-page-renderer' : 'default-page-renderer',
+        pageSourceLength: page.sourceText.length,
+        imageByteLength: page.imageBytes?.byteLength ?? 0
       }
     };
   }

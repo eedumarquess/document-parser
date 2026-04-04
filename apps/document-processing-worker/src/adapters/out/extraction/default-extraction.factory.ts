@@ -5,6 +5,8 @@ import { SensitiveDataMaskingService } from '../../../domain/extraction/sensitiv
 import { TextConsolidationService } from '../../../domain/extraction/text-consolidation.service';
 import { TextNormalizationService } from '../../../domain/extraction/text-normalization.service';
 import type { ProcessingOutcomePolicy } from '../../../domain/policies/processing-outcome.policy';
+import { CompositeOcrEngineAdapter } from './composite-ocr-engine.adapter';
+import { CompositePageRendererAdapter } from './composite-page-renderer.adapter';
 import { DefaultPageRendererAdapter } from './default-page-renderer.adapter';
 import { DeterministicOcrEngineAdapter } from './deterministic-ocr-engine.adapter';
 import { HuggingFaceLlmExtractionAdapter } from './huggingface-llm-extraction.adapter';
@@ -13,9 +15,11 @@ import { FallbackResolutionStage } from './internal/fallback-resolution.stage';
 import { OutcomeAssemblyStage } from './internal/outcome-assembly.stage';
 import { PageExtractionStage } from './internal/page-extraction.stage';
 import { LocalHeuristicLlmExtractionAdapter } from './local-heuristic-llm-extraction.adapter';
+import { NativePdfPageRendererAdapter } from './native-pdf-page-renderer.adapter';
 import { OcrLlmExtractionPipelineAdapter } from './ocr-llm-extraction.pipeline.adapter';
 import { OpenRouterLlmExtractionAdapter } from './openrouter-llm-extraction.adapter';
 import { resolveRemoteLlmExecutionConfigFromEnv } from './remote-llm-execution';
+import { TesseractOcrEngineAdapter } from './tesseract-ocr-engine.adapter';
 
 export function createDefaultExtractionPipeline(
   policy: ProcessingOutcomePolicy,
@@ -27,8 +31,18 @@ export function createDefaultExtractionPipeline(
 ): OcrLlmExtractionPipelineAdapter {
   const normalization = new TextNormalizationService();
   const artifactReferenceFactory = new ArtifactReferenceFactory();
-  const pageRenderer = overrides.pageRenderer ?? new DefaultPageRendererAdapter();
-  const ocrEngine = overrides.ocrEngine ?? new DeterministicOcrEngineAdapter();
+  const pageRenderer =
+    overrides.pageRenderer ??
+    new CompositePageRendererAdapter(
+      new NativePdfPageRendererAdapter(),
+      new DefaultPageRendererAdapter()
+    );
+  const ocrEngine =
+    overrides.ocrEngine ??
+    new CompositeOcrEngineAdapter(
+      new TesseractOcrEngineAdapter(),
+      new DeterministicOcrEngineAdapter()
+    );
   const llmExtraction = overrides.llmExtraction ?? createConfiguredLlmExtractionPort();
   const heuristicEvaluationService = new HeuristicEvaluationService(normalization);
   const textConsolidationService = new TextConsolidationService();
