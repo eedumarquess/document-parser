@@ -190,6 +190,159 @@ describe('HeuristicEvaluationService', () => {
     );
   });
 
+  it('does not create document/page text fallback when native PDF pages have no sourceText', () => {
+    const service = new HeuristicEvaluationService(new TextNormalizationService());
+
+    const targets = service.evaluateFallbackTargets({
+      pages: [
+        {
+          pageNumber: 1,
+          rawOcrText: '',
+          normalizedText: '',
+          handwrittenSegments: [],
+          checkboxFindings: [],
+          criticalFieldFindings: [],
+          confidenceScore: 0.12,
+          renderReference: {} as never,
+          rawOcrReference: {} as never
+        }
+      ],
+      renderedPages: [{ pageNumber: 1, mimeType: 'image/png', imageBytes: Buffer.from('png'), sourceText: '' }]
+    });
+
+    expect(targets).toEqual([]);
+  });
+
+  it('does not create document/page text fallback when rendered source still looks like PDF structure', () => {
+    const service = new HeuristicEvaluationService(new TextNormalizationService());
+
+    const targets = service.evaluateFallbackTargets({
+      pages: [
+        {
+          pageNumber: 1,
+          rawOcrText: '',
+          normalizedText: '',
+          handwrittenSegments: [],
+          checkboxFindings: [],
+          criticalFieldFindings: [],
+          confidenceScore: 0.12,
+          renderReference: {} as never,
+          rawOcrReference: {} as never
+        }
+      ],
+      renderedPages: [
+        {
+          pageNumber: 1,
+          mimeType: 'image/png',
+          sourceText: '/Type /Page\n1 0 obj\n<< /Length 12 >>\nstream\nendobj'
+        }
+      ]
+    });
+
+    expect(targets).toEqual([]);
+  });
+
+  it('does not create document/page text fallback when raw source combines PDF header and structural markers', () => {
+    const service = new HeuristicEvaluationService(new TextNormalizationService());
+
+    const targets = service.evaluateFallbackTargets({
+      pages: [
+        {
+          pageNumber: 1,
+          rawOcrText: '',
+          normalizedText: '',
+          handwrittenSegments: [],
+          checkboxFindings: [],
+          criticalFieldFindings: [],
+          confidenceScore: 0.12,
+          renderReference: {} as never,
+          rawOcrReference: {} as never
+        }
+      ],
+      renderedPages: [
+        {
+          pageNumber: 1,
+          mimeType: 'image/png',
+          sourceText: '%PDF-1.7\nendstream'
+        }
+      ]
+    });
+
+    expect(targets).toEqual([]);
+  });
+
+  it('keeps document/page text fallback when the source contains ordinary stream wording', () => {
+    const service = new HeuristicEvaluationService(new TextNormalizationService());
+
+    const targets = service.evaluateFallbackTargets({
+      pages: [
+        {
+          pageNumber: 1,
+          rawOcrText: '',
+          normalizedText: '',
+          handwrittenSegments: [],
+          checkboxFindings: [],
+          criticalFieldFindings: [],
+          confidenceScore: 0.12,
+          renderReference: {} as never,
+          rawOcrReference: {} as never
+        }
+      ],
+      renderedPages: [
+        {
+          pageNumber: 1,
+          mimeType: 'image/png',
+          sourceText: 'Paciente segue em stream de sinais vitais.'
+        }
+      ]
+    });
+
+    expect(targets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          targetType: 'DOCUMENT',
+          sourceText: 'Paciente segue em stream de sinais vitais.'
+        })
+      ])
+    );
+  });
+
+  it('keeps document/page text fallback when the source contains isolated endstream wording', () => {
+    const service = new HeuristicEvaluationService(new TextNormalizationService());
+
+    const targets = service.evaluateFallbackTargets({
+      pages: [
+        {
+          pageNumber: 1,
+          rawOcrText: '',
+          normalizedText: '',
+          handwrittenSegments: [],
+          checkboxFindings: [],
+          criticalFieldFindings: [],
+          confidenceScore: 0.12,
+          renderReference: {} as never,
+          rawOcrReference: {} as never
+        }
+      ],
+      renderedPages: [
+        {
+          pageNumber: 1,
+          mimeType: 'image/png',
+          sourceText: 'Paciente relata termo endstream no texto reconhecido.'
+        }
+      ]
+    });
+
+    expect(targets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          targetType: 'DOCUMENT',
+          sourceText: 'Paciente relata termo endstream no texto reconhecido.'
+        })
+      ])
+    );
+  });
+
   it('computes warnings from unresolved targets and illegible payload fragments', () => {
     const result = service.calculateConfidenceAndWarnings({
       pages: [],

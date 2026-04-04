@@ -4,6 +4,18 @@ import type { ArtifactOperationalResponse } from '../../contracts/http';
 import type { PageArtifactRecord } from '../../contracts/models';
 
 const PREVIEW_MAX_LENGTH = 240;
+const PDF_BINARY_MARKERS = [
+  /%pdf-/i,
+  /flatedecode/i
+];
+const PDF_STRUCTURAL_MARKERS = [
+  /\/type\s*\/page\b/i,
+  /\b\d+\s+\d+\s+obj\b/i,
+  /\bendobj\b/i,
+  /(^|[\r\n])\s*xref(\s|$)/i,
+  /\bendstream\b/i,
+  /\bstream\b[\s\S]{0,200}\b(?:endobj|endstream)\b/i
+];
 
 @Injectable()
 export class ArtifactPreviewService {
@@ -30,6 +42,9 @@ export class ArtifactPreviewService {
   private buildPreviewText(artifact: PageArtifactRecord): string | undefined {
     const previewSource = this.extractPreviewSource(artifact);
     if (previewSource === undefined) {
+      return undefined;
+    }
+    if (artifact.artifactType === ArtifactType.OCR_JSON && !this.isReadableText(previewSource)) {
       return undefined;
     }
 
@@ -93,5 +108,26 @@ export class ArtifactPreviewService {
     } catch {
       return undefined;
     }
+  }
+
+  private isReadableText(candidate: string): boolean {
+    if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(candidate)) {
+      return false;
+    }
+
+    return !this.looksLikePdfStructure(candidate);
+  }
+
+  private looksLikePdfStructure(candidate: string): boolean {
+    if (PDF_BINARY_MARKERS.some((pattern) => pattern.test(candidate))) {
+      return true;
+    }
+
+    const structuralSignalCount = PDF_STRUCTURAL_MARKERS.reduce(
+      (count, pattern) => count + (pattern.test(candidate) ? 1 : 0),
+      0
+    );
+
+    return structuralSignalCount >= 2;
   }
 }

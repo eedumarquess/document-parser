@@ -4,6 +4,18 @@ import type { FallbackTarget, PageExtraction, RenderedPage } from './extraction.
 import type { TextNormalizationService } from './text-normalization.service';
 
 const PAGE_CONFIDENCE_FALLBACK_THRESHOLD = 0.45;
+const PDF_BINARY_MARKERS = [
+  /%pdf-/i,
+  /flatedecode/i
+];
+const PDF_STRUCTURAL_MARKERS = [
+  /\/type\s*\/page\b/i,
+  /\b\d+\s+\d+\s+obj\b/i,
+  /\bendobj\b/i,
+  /(^|[\r\n])\s*xref(\s|$)/i,
+  /\bendstream\b/i,
+  /\bstream\b[\s\S]{0,200}\b(?:endobj|endstream)\b/i
+];
 
 export class HeuristicEvaluationService {
   public constructor(private readonly normalizationService: TextNormalizationService) {}
@@ -97,11 +109,17 @@ export class HeuristicEvaluationService {
     renderedPages: RenderedPage[];
   }): FallbackTarget[] {
     const targets: FallbackTarget[] = [];
+    const readableSourcePages = input.renderedPages
+      .map((page) => ({
+        page,
+        readableSourceText: this.buildReadableFallbackSource(page.sourceText)
+      }))
+      .filter((candidate) => candidate.readableSourceText !== '');
     const everyPageNeedsGlobalFallback =
       input.pages.length > 0 &&
       input.pages.every((page) => page.rawOcrText.trim() === '' || page.confidenceScore < PAGE_CONFIDENCE_FALLBACK_THRESHOLD);
 
-    if (everyPageNeedsGlobalFallback) {
+    if (everyPageNeedsGlobalFallback && readableSourcePages.length > 0) {
       const fallbackReason =
         input.pages.every((page) => page.rawOcrText.trim() === '') ? FallbackReason.OCR_EMPTY : FallbackReason.LOW_GLOBAL_CONFIDENCE;
 
@@ -109,10 +127,7 @@ export class HeuristicEvaluationService {
         targetId: 'document-fallback',
         targetType: 'DOCUMENT',
         targetLocator: { locatorType: 'DOCUMENT' },
-        sourceText: input.renderedPages
-          .map((page) => this.normalizationService.buildReadableSourceText(page.sourceText))
-          .join('\n\n')
-          .trim(),
+        sourceText: readableSourcePages.map((candidate) => candidate.readableSourceText).join('\n\n'),
         fallbackReason,
         isCritical: true,
         confidenceScore: 0.2
@@ -123,24 +138,31 @@ export class HeuristicEvaluationService {
 
     for (const page of input.pages) {
       const renderedPage = input.renderedPages.find((candidate) => candidate.pageNumber === page.pageNumber);
-      if (renderedPage !== undefined && page.rawOcrText.trim() === '') {
+      const readableSourceText =
+        renderedPage === undefined ? '' : this.buildReadableFallbackSource(renderedPage.sourceText);
+
+      if (renderedPage !== undefined && readableSourceText !== '' && page.rawOcrText.trim() === '') {
         targets.push({
           targetId: `page-${page.pageNumber}-ocr-empty`,
           pageNumber: page.pageNumber,
           targetType: 'PAGE',
           targetLocator: { locatorType: 'PAGE', pageNumber: page.pageNumber },
-          sourceText: this.normalizationService.buildReadableSourceText(renderedPage.sourceText),
+          sourceText: readableSourceText,
           fallbackReason: FallbackReason.OCR_EMPTY,
           isCritical: true,
           confidenceScore: 0.2
         });
-      } else if (renderedPage !== undefined && page.confidenceScore < PAGE_CONFIDENCE_FALLBACK_THRESHOLD) {
+      } else if (
+        renderedPage !== undefined &&
+        readableSourceText !== '' &&
+        page.confidenceScore < PAGE_CONFIDENCE_FALLBACK_THRESHOLD
+      ) {
         targets.push({
           targetId: `page-${page.pageNumber}-low-confidence`,
           pageNumber: page.pageNumber,
           targetType: 'PAGE',
           targetLocator: { locatorType: 'PAGE', pageNumber: page.pageNumber },
-          sourceText: this.normalizationService.buildReadableSourceText(renderedPage.sourceText),
+          sourceText: readableSourceText,
           fallbackReason: FallbackReason.LOW_GLOBAL_CONFIDENCE,
           isCritical: true,
           confidenceScore: 0.25
@@ -191,6 +213,32 @@ export class HeuristicEvaluationService {
     }
 
     return targets;
+  }
+
+  private buildReadableFallbackSource(sourceText: string): string {
+    if (this.looksLikePdfStructure(sourceText)) {
+      return '';
+    }
+
+    const candidate = this.normalizationService.buildReadableSourceText(sourceText).trim();
+    if (candidate === '') {
+      return '';
+    }
+
+    return this.looksLikePdfStructure(candidate) ? '' : candidate;
+  }
+
+  private looksLikePdfStructure(candidate: string): boolean {
+    if (PDF_BINARY_MARKERS.some((pattern) => pattern.test(candidate))) {
+      return true;
+    }
+
+    const structuralSignalCount = PDF_STRUCTURAL_MARKERS.reduce(
+      (count, pattern) => count + (pattern.test(candidate) ? 1 : 0),
+      0
+    );
+
+    return structuralSignalCount >= 2;
   }
 
   public calculateConfidenceAndWarnings(input: {

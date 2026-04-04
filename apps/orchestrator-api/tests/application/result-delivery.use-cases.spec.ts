@@ -203,6 +203,118 @@ const createOperationalContext = () => {
   };
 };
 
+describe('ArtifactPreviewService', () => {
+  it('omits previewText when OCR metadata looks like binary/PDF structure', () => {
+    const service = new ArtifactPreviewService(new RedactionPolicyService());
+
+    const response = service.toResponse({
+      artifactId: 'artifact-1',
+      artifactType: 'OCR_JSON',
+      pageNumber: 1,
+      mimeType: 'application/json',
+      storageBucket: 'artifacts',
+      storageObjectKey: 'ocr/job/page-1.json',
+      metadata: {
+        rawText: '%PDF-1.7 endstream FlateDecode'
+      },
+      createdAt: new Date('2026-04-03T00:00:00.000Z'),
+      retentionUntil: new Date('2026-04-30T00:00:00.000Z'),
+      documentId: 'doc-1',
+      jobId: 'job-1'
+    });
+
+    expect(response.previewText).toBeUndefined();
+  });
+
+  it('omits previewText when OCR metadata looks like PDF object syntax', () => {
+    const service = new ArtifactPreviewService(new RedactionPolicyService());
+
+    const response = service.toResponse({
+      artifactId: 'artifact-2',
+      artifactType: 'OCR_JSON',
+      pageNumber: 1,
+      mimeType: 'application/json',
+      storageBucket: 'artifacts',
+      storageObjectKey: 'ocr/job/page-2.json',
+      metadata: {
+        rawText: '/Type /Page\n1 0 obj\n<< /Length 12 >>\nstream\nendobj'
+      },
+      createdAt: new Date('2026-04-03T00:00:00.000Z'),
+      retentionUntil: new Date('2026-04-30T00:00:00.000Z'),
+      documentId: 'doc-1',
+      jobId: 'job-1'
+    });
+
+    expect(response.previewText).toBeUndefined();
+  });
+
+  it('keeps previewText for non-OCR artifacts even when text contains ordinary stream wording', () => {
+    const service = new ArtifactPreviewService(new RedactionPolicyService());
+
+    const response = service.toResponse({
+      artifactId: 'artifact-3',
+      artifactType: 'LLM_PROMPT',
+      pageNumber: 1,
+      mimeType: 'text/plain',
+      storageBucket: 'artifacts',
+      storageObjectKey: 'prompt/job/page-1.txt',
+      metadata: {
+        promptText: 'Explique o stream de sinais vitais desta pagina.'
+      },
+      createdAt: new Date('2026-04-03T00:00:00.000Z'),
+      retentionUntil: new Date('2026-04-30T00:00:00.000Z'),
+      documentId: 'doc-1',
+      jobId: 'job-1'
+    });
+
+    expect(response.previewText).toBe('Explique o stream de sinais vitais desta pagina.');
+  });
+
+  it('keeps previewText for OCR artifacts when text only contains ordinary stream wording', () => {
+    const service = new ArtifactPreviewService(new RedactionPolicyService());
+
+    const response = service.toResponse({
+      artifactId: 'artifact-4',
+      artifactType: 'OCR_JSON',
+      pageNumber: 1,
+      mimeType: 'application/json',
+      storageBucket: 'artifacts',
+      storageObjectKey: 'ocr/job/page-4.json',
+      metadata: {
+        rawText: 'Paciente segue em stream de sinais vitais.'
+      },
+      createdAt: new Date('2026-04-03T00:00:00.000Z'),
+      retentionUntil: new Date('2026-04-30T00:00:00.000Z'),
+      documentId: 'doc-1',
+      jobId: 'job-1'
+    });
+
+    expect(response.previewText).toBe('Paciente segue em stream de sinais vitais.');
+  });
+
+  it('keeps previewText for OCR artifacts when text only contains isolated endstream wording', () => {
+    const service = new ArtifactPreviewService(new RedactionPolicyService());
+
+    const response = service.toResponse({
+      artifactId: 'artifact-5',
+      artifactType: 'OCR_JSON',
+      pageNumber: 1,
+      mimeType: 'application/json',
+      storageBucket: 'artifacts',
+      storageObjectKey: 'ocr/job/page-5.json',
+      metadata: {
+        rawText: 'Paciente relata termo endstream no texto reconhecido.'
+      },
+      createdAt: new Date('2026-04-03T00:00:00.000Z'),
+      retentionUntil: new Date('2026-04-30T00:00:00.000Z'),
+      documentId: 'doc-1',
+      jobId: 'job-1'
+    });
+
+    expect(response.previewText).toBe('Paciente relata termo endstream no texto reconhecido.');
+  });
+});
+
 describe('GetJobStatusUseCase', () => {
   it('returns the minimal job response for OWNER', async () => {
     const context = createResultDeliveryContext();
