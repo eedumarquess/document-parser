@@ -147,26 +147,37 @@ function validateExternalLibrary(requestedPath) {
 }
 
 function runPnpm(args, cwd) {
-  return runCommand(getCorepackCommand(), ['pnpm', ...args], cwd);
+  return runChild(spawnPnpm(args, cwd));
 }
 
 function runCommand(command, args, cwd) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd,
-      stdio: 'inherit',
-      env: process.env
-    });
+  return runChild(spawnCommand(command, args, cwd));
+}
 
+function spawnPnpm(args, cwd) {
+  return spawnCommand(getCorepackCommand(), ['pnpm', ...args], cwd);
+}
+
+function spawnCommand(command, args, cwd) {
+  const invocation = buildSpawnInvocation(command, args);
+  return spawn(invocation.command, invocation.args, {
+    cwd,
+    stdio: 'inherit',
+    env: process.env
+  });
+}
+
+function runChild(child) {
+  return new Promise((resolve, reject) => {
     child.on('error', reject);
     child.on('exit', (code, signal) => {
       if (signal !== null) {
-        reject(new Error(`Command "${command} ${args.join(' ')}" terminated with signal ${signal}.`));
+        reject(new Error(`Child process terminated with signal ${signal}.`));
         return;
       }
 
       if (code !== 0) {
-        reject(new Error(`Command "${command} ${args.join(' ')}" failed with exit code ${code}.`));
+        reject(new Error(`Child process failed with exit code ${code}.`));
         return;
       }
 
@@ -175,14 +186,42 @@ function runCommand(command, args, cwd) {
   });
 }
 
+function buildSpawnInvocation(command, args) {
+  if (process.platform !== 'win32') {
+    return {
+      command,
+      args
+    };
+  }
+
+  const shellCommand = [command, ...args].map(quoteWindowsArgument).join(' ');
+  return {
+    command: process.env.ComSpec || 'cmd.exe',
+    args: ['/d', '/s', '/c', shellCommand]
+  };
+}
+
 function getCorepackCommand() {
   return process.platform === 'win32' ? 'corepack.cmd' : 'corepack';
+}
+
+function quoteWindowsArgument(value) {
+  if (value === '') {
+    return '""';
+  }
+
+  if (!/[ \t"]/u.test(value)) {
+    return value;
+  }
+
+  return `"${value.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/g, '$1$1')}"`;
 }
 
 module.exports = {
   main,
   repoRoot,
-  runPnpm
+  runPnpm,
+  spawnPnpm
 };
 
 if (require.main === module) {

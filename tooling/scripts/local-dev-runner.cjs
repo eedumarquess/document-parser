@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
-const { main: bootstrapWorkspace, repoRoot, runPnpm, spawnPnpm } = require('./docker-dev-bootstrap.cjs');
+const { repoRoot, runPnpm, spawnPnpm } = require('./docker-dev-bootstrap.cjs');
 
 const SERVICE_CONFIG = {
   api: {
@@ -31,15 +31,13 @@ const SERVICE_CONFIG = {
 async function main() {
   const serviceName = process.argv[2];
   if (serviceName !== 'api' && serviceName !== 'worker') {
-    throw new Error('Usage: node tooling/scripts/docker-dev-runner.cjs <api|worker>');
+    throw new Error('Usage: node tooling/scripts/local-dev-runner.cjs <api|worker>');
   }
 
   const config = SERVICE_CONFIG[serviceName];
   process.env[config.runtimeVariable] = process.env[config.runtimeVariable] ?? 'real';
 
-  await bootstrapWorkspace();
-
-  console.log(`[docker-dev-runner] Building ${serviceName} for the first time...`);
+  console.log(`[local-dev-runner] Building ${serviceName} for the first time...`);
   await runPnpm(['exec', 'tsc', '-b', ...config.tsconfigPaths, '--pretty', 'false'], repoRoot);
 
   const entryAbsolutePath = path.join(repoRoot, config.entryPath);
@@ -47,13 +45,13 @@ async function main() {
     throw new Error(`Expected entry file "${config.entryPath}" to exist after the initial build.`);
   }
 
-  console.log(`[docker-dev-runner] Starting TypeScript watch for ${serviceName}...`);
+  console.log(`[local-dev-runner] Starting TypeScript watch for ${serviceName}...`);
   const typeScriptWatch = spawnPnpm(
     ['exec', 'tsc', '-b', ...config.tsconfigPaths, '--watch', '--preserveWatchOutput', '--pretty', 'false'],
     repoRoot
   );
 
-  console.log(`[docker-dev-runner] Starting Node watch for ${serviceName}...`);
+  console.log(`[local-dev-runner] Starting Node watch for ${serviceName}...`);
   const applicationProcess = spawn(process.execPath, ['--watch', entryAbsolutePath], {
     cwd: repoRoot,
     env: process.env,
@@ -106,7 +104,7 @@ function stopChild(child) {
 
 function exitWithChildStatus(code, signal) {
   if (signal !== null) {
-    console.error(`[docker-dev-runner] Child process terminated with signal ${signal}.`);
+    console.error(`[local-dev-runner] Child process terminated with signal ${signal}.`);
     process.kill(process.pid, signal);
     return;
   }
@@ -116,7 +114,7 @@ function exitWithChildStatus(code, signal) {
 
 if (require.main === module) {
   main().catch((error) => {
-    console.error(`[docker-dev-runner] ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`[local-dev-runner] ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;
   });
 }

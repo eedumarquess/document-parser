@@ -147,6 +147,24 @@ Variaveis opcionais de LLM remoto no worker:
 - variaveis de runtime: `PDFINFO_BINARY`, `PDFTOPPM_BINARY`, `TESSERACT_BINARY`, `TESSERACT_LANGUAGE`
 - para rodar o smoke test nativo localmente, use `RUN_NATIVE_PDF_TESTS=true`
 
+### Base local automatizada no Windows
+
+Se quiser rodar a API e o worker localmente e deixar so a infraestrutura no Docker:
+
+1. ajuste `.env` como base local; se ele nao existir o script usa `.env.example`
+2. execute `.\start-dev.ps1`
+
+O script:
+
+- sobe `MongoDB`, `RabbitMQ` e `MinIO` com `docker-compose.local.yml`
+- inicializa o replica set do Mongo para suportar transacoes
+- abre duas janelas do PowerShell, uma para a API e outra para o worker, ambas em watch mode
+
+Interfaces uteis:
+
+- RabbitMQ: `http://localhost:15672`
+- MinIO Console: `http://localhost:9001`
+
 ### Docker para desenvolvimento
 
 O repositorio agora inclui `Dockerfile` multi-stage e `docker-compose.dev.yml` para desenvolvimento em runtime `real`, reaproveitando infra externa ja existente.

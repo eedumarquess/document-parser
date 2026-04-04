@@ -1,0 +1,76 @@
+services:
+  mongodb:
+    image: mongo:7.0
+    command: ["mongod", "--bind_ip_all", "--replSet", "rs0"]
+    ports:
+      - "27017:27017"
+    volumes:
+      - document-parser-local-mongodb:/data/db
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mongosh --quiet --eval \"try { quit(rs.status().ok === 1 ? 0 : 1); } catch (error) { quit(1); }\""
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 5s
+
+  mongodb-init:
+    image: mongo:7.0
+    depends_on:
+      mongodb:
+        condition: service_started
+    restart: "no"
+    entrypoint:
+      - /bin/sh
+      - -lc
+      - |
+        until mongosh --host mongodb:27017 --quiet --eval "db.runCommand({ ping: 1 }).ok" >/dev/null 2>&1; do
+          sleep 2
+        done
+        mongosh --host mongodb:27017 --quiet --eval "
+          const desiredConfig = { _id: 'rs0', members: [{ _id: 0, host: 'localhost:27017' }] };
+          try {
+            const currentConfig = rs.conf();
+            const currentHost = currentConfig.members?.[0]?.host;
+            if (currentHost !== desiredConfig.members[0].host) {
+              desiredConfig.version = (currentConfig.version ?? 1) + 1;
+              rs.reconfig(desiredConfig, { force: true });
+            }
+          } catch (error) {
+            rs.initiate(desiredConfig);
+          }
+        "
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - document-parser-local-rabbitmq:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+
+  minio:
+    image: minio/minio:RELEASE.2024-03-30T09-41-56Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - document-parser-local-minio:/data
+
+volumes:
+  document-parser-local-mongodb:
+  document-parser-local-rabbitmq:
+  document-parser-local-minio:
