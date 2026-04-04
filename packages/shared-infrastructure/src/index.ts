@@ -5,3 +5,4 @@ export * from './ocr/tesseract-ocr-tools';
 export * from './pdf/poppler-pdf-tools';
 export * from './mongodb';
 export * from './rabbitmq-job-publisher.adapter';
+export * from './runtime';
