@@ -1,5 +1,5 @@
 import { HttpStatus } from '@nestjs/common';
-import { ApplicationError, ErrorCode } from '@document-parser/shared-kernel';
+import { ApplicationError, ErrorCode, FatalFailureError } from '@document-parser/shared-kernel';
 import {
   buildHttpErrorResponse,
   createValidationHttpException,
@@ -60,6 +60,28 @@ describe('HTTP error helpers', () => {
     expect(exception.getResponse()).toEqual({
       errorCode: ErrorCode.FATAL_FAILURE,
       message: 'publisher offline',
+      metadata: undefined
+    });
+  });
+
+  it('hides FatalFailureError metadata from the HTTP response', () => {
+    const error = new FatalFailureError('Native PDF/OCR command failed', {
+      command: 'pdfinfo',
+      stdout: 'Pages: 3',
+      stderr: 'warning'
+    });
+
+    const exception = toHttpException(error);
+
+    expect(error.metadata).toEqual({
+      command: 'pdfinfo',
+      stdout: 'Pages: 3',
+      stderr: 'warning'
+    });
+    expect(exception.getStatus()).toBe(HttpStatus.INTERNAL_SERVER_ERROR);
+    expect(exception.getResponse()).toEqual({
+      errorCode: ErrorCode.FATAL_FAILURE,
+      message: 'Native PDF/OCR command failed',
       metadata: undefined
     });
   });

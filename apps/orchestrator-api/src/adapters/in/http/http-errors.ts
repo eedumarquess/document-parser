@@ -23,8 +23,10 @@ export const createValidationHttpException = (
 
 export const toHttpException = (error: unknown): HttpException => {
   if (error instanceof ApplicationError) {
+    const metadata = error.errorCode === ErrorCode.FATAL_FAILURE ? undefined : error.metadata;
+
     return new HttpException(
-      buildHttpErrorResponse(error.errorCode, error.message, error.metadata),
+      buildHttpErrorResponse(error.errorCode, error.message, metadata),
       error.httpStatus
     );
   }
