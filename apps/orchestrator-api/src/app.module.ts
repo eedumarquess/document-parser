@@ -8,7 +8,9 @@ import {
 } from '@document-parser/shared-kernel';
 import { RuntimeResourceRegistry } from '@document-parser/shared-infrastructure';
 import { DeadLettersController } from './adapters/in/http/dead-letters.controller';
+import { DevConvenienceController } from './adapters/in/http/dev-convenience.controller';
 import { DocumentJobsController } from './adapters/in/http/document-jobs.controller';
+import { HealthController } from './adapters/in/http/health.controller';
 import { OperationalJobsController } from './adapters/in/http/operational-jobs.controller';
 import { SimpleRbacAuthorizationAdapter } from './adapters/out/auth/simple-rbac.adapter';
 import { RandomIdGeneratorAdapter } from './adapters/out/clock/random-id-generator.adapter';
@@ -45,6 +47,11 @@ import { ReplayDeadLetterUseCase } from './application/use-cases/replay-dead-let
 import { ReprocessDocumentUseCase } from './application/use-cases/reprocess-document.use-case';
 import { SubmitDocumentUseCase } from './application/use-cases/submit-document.use-case';
 import { RuntimeResourceShutdownService } from './application/services/runtime-resource-shutdown.service';
+import {
+  DEFAULT_DEV_CONVENIENCE_RUNTIME,
+  type DevConvenienceRuntime,
+  SubmitDocumentAndWaitUseCase
+} from './application/use-cases/submit-document-and-wait.use-case';
 import type {
   AuditPort,
   AuthorizationPort,
@@ -98,6 +105,7 @@ export type OrchestratorProviderOverrides = Partial<{
   authorization: AuthorizationPort;
   unitOfWork: UnitOfWorkPort;
   queuePublicationDispatcherRuntime: QueuePublicationDispatcherRuntime;
+  devConvenienceRuntime: DevConvenienceRuntime;
   serviceName: string;
   runtimeResources: RuntimeResourceRegistry;
 }>;
@@ -147,6 +155,10 @@ export class OrchestratorApiModule {
         provide: TOKENS.QUEUE_PUBLICATION_DISPATCHER_RUNTIME,
         useValue: overrides.queuePublicationDispatcherRuntime ?? DEFAULT_QUEUE_PUBLICATION_DISPATCHER_RUNTIME
       },
+      {
+        provide: TOKENS.DEV_CONVENIENCE_RUNTIME,
+        useValue: overrides.devConvenienceRuntime ?? DEFAULT_DEV_CONVENIENCE_RUNTIME
+      },
       { provide: TOKENS.UNIT_OF_WORK, useValue: overrides.unitOfWork ?? new InMemoryUnitOfWork() },
       { provide: TOKENS.JOB_PUBLISHER, useValue: overrides.publisher ?? new InMemoryJobPublisherAdapter() },
       { provide: TOKENS.AUDIT, useValue: overrides.audit ?? new InMemoryAuditRepository() },
@@ -170,6 +182,7 @@ export class OrchestratorApiModule {
       QueuePublicationOutboxDispatcherService,
       DerivedJobOrchestrator,
       SubmitDocumentUseCase,
+      SubmitDocumentAndWaitUseCase,
       GetJobStatusUseCase,
       GetProcessingResultUseCase,
       GetJobOperationalContextUseCase,
@@ -179,7 +192,13 @@ export class OrchestratorApiModule {
 
     return {
       module: OrchestratorApiModule,
-      controllers: [DocumentJobsController, DeadLettersController, OperationalJobsController],
+      controllers: [
+        HealthController,
+        ...(overrides.devConvenienceRuntime?.enabled ? [DevConvenienceController] : []),
+        DocumentJobsController,
+        DeadLettersController,
+        OperationalJobsController
+      ],
       providers,
       exports: providers
     };
