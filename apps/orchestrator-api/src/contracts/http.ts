@@ -29,6 +29,18 @@ export type ResultResponse = {
   payload: string;
 };
 
+export type SubmitAndWaitResponse = {
+  job: JobResponse;
+  result: ResultResponse;
+};
+
+export type HealthResponse = {
+  status: 'ok';
+  service: string;
+  runtimeMode: 'memory' | 'real';
+  timestamp: string;
+};
+
 export type HttpErrorResponse = {
   errorCode: ErrorCode;
   message: string;
