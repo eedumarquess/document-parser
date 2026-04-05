@@ -1,4 +1,4 @@
-import type { INestApplication } from '@nestjs/common';
+import { HttpStatus, type INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import {
@@ -10,7 +10,7 @@ import {
   Role
 } from '@document-parser/shared-kernel';
 import { FixedClock, IncrementalIdGenerator, createPdfBuffer } from '@document-parser/testkit';
-import { OrchestratorApiModule } from '../../src/app.module';
+import { OrchestratorApiModule, type OrchestratorProviderOverrides } from '../../src/app.module';
 import { InMemoryJobPublisherAdapter } from '../../src/adapters/out/queue/in-memory-job-publisher.adapter';
 import {
   InMemoryAuditRepository,
@@ -24,6 +24,7 @@ import {
 } from '../../src/adapters/out/repositories/in-memory.repositories';
 import { InMemoryBinaryStorageAdapter } from '../../src/adapters/out/storage/in-memory-binary-storage.adapter';
 import { SimplePageCounterAdapter } from '../../src/adapters/out/storage/simple-page-counter.adapter';
+import { configureOrchestratorHttpApp } from '../../src/http-app.config';
 
 class FailingJobPublisherAdapter extends InMemoryJobPublisherAdapter {
   public override async publishRequested(): Promise<void> {
@@ -220,11 +221,282 @@ describe('Document jobs e2e', () => {
     }).compile();
 
     app = moduleRef.createNestApplication();
+    configureOrchestratorHttpApp(app);
     await app.init();
   });
 
   afterAll(async () => {
     await app.close();
+  });
+
+  it('exposes a simple health endpoint for local onboarding', async () => {
+    const response = await request(app.getHttpServer()).get('/health');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      status: 'ok',
+      service: 'document-parser-orchestrator-api',
+      runtimeMode: 'memory'
+    });
+    expect(typeof response.body.timestamp).toBe('string');
+  });
+
+  it('publishes an OpenAPI document with the primary and advanced routes', async () => {
+    const response = await request(app.getHttpServer()).get('/docs-json');
+
+    expect(response.status).toBe(200);
+    expect(response.body.openapi).toMatch(/^3\./);
+    expect(response.body.paths).toEqual(
+      expect.objectContaining({
+        '/health': expect.any(Object),
+        '/v1/parsing/jobs': expect.any(Object),
+        '/v1/parsing/jobs/{jobId}': expect.any(Object),
+        '/v1/parsing/jobs/{jobId}/result': expect.any(Object),
+        '/v1/parsing/jobs/{jobId}/reprocess': expect.any(Object),
+        '/v1/parsing/dead-letters/{dlqEventId}/replay': expect.any(Object),
+        '/v1/ops/jobs/{jobId}/context': expect.any(Object)
+      })
+    );
+    expect(response.body.tags).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'Jobs' }),
+        expect.objectContaining({ name: 'Results' }),
+        expect.objectContaining({ name: 'Operations' }),
+        expect.objectContaining({ name: 'Dead Letters' }),
+        expect.objectContaining({ name: 'System' })
+      ])
+    );
+  });
+
+  it('does not expose the dev-only submit-and-wait endpoint when convenience endpoints are disabled', async () => {
+    const response = await request(app.getHttpServer())
+      .post('/v1/dev/parsing/jobs/submit-and-wait')
+      .attach('file', createPdfBuffer(1, 'hidden route'), {
+        filename: 'hidden-route.pdf',
+        contentType: 'application/pdf'
+      });
+
+    expect(response.status).toBe(404);
+  });
+
+  it('submits and waits for a terminal result when dev convenience endpoints are enabled', async () => {
+    const clock = new FixedClock();
+    const idGenerator = new IncrementalIdGenerator();
+    const storage = new InMemoryBinaryStorageAdapter();
+    const documents = new InMemoryDocumentRepository();
+    const jobs = new InMemoryProcessingJobRepository();
+    const attempts = new InMemoryJobAttemptRepository();
+    const results = new InMemoryProcessingResultRepository();
+    const publisher = new InMemoryJobPublisherAdapter();
+
+    publisher.subscribe(async (message) => {
+      const document = await documents.findById(message.documentId);
+      const job = await jobs.findById(message.jobId);
+      if (document === undefined || job === undefined) {
+        throw new Error('worker simulation missing context');
+      }
+
+      await jobs.save({
+        ...job,
+        status: JobStatus.COMPLETED,
+        finishedAt: clock.now(),
+        updatedAt: clock.now()
+      });
+      await results.save({
+        resultId: idGenerator.next('result'),
+        jobId: job.jobId,
+        documentId: job.documentId,
+        compatibilityKey: `${document.hash}:${job.requestedMode}:${DEFAULT_PIPELINE_VERSION}:${DEFAULT_OUTPUT_VERSION}`,
+        status: JobStatus.COMPLETED,
+        requestedMode: job.requestedMode,
+        pipelineVersion: DEFAULT_PIPELINE_VERSION,
+        outputVersion: DEFAULT_OUTPUT_VERSION,
+        confidence: 0.98,
+        warnings: [],
+        payload: (await storage.read(document.storageReference)).toString('utf8').trim(),
+        engineUsed: 'OCR',
+        totalLatencyMs: 900,
+        createdAt: clock.now(),
+        updatedAt: clock.now(),
+        retentionUntil: new Date('2026-06-23T12:00:00.000Z')
+      });
+    });
+
+    const devApp = (
+      await Test.createTestingModule({
+        imports: [
+          OrchestratorApiModule.register({
+            clock,
+            idGenerator,
+            storage,
+            pageCounter: new SimplePageCounterAdapter(),
+            documents,
+            jobs,
+            attempts,
+            results,
+            artifacts: new InMemoryPageArtifactRepository(),
+            deadLetters: new InMemoryDeadLetterRepository(),
+            audit: new InMemoryAuditRepository(),
+            telemetry: new InMemoryTelemetryEventRepository(),
+            publisher,
+            queuePublicationDispatcherRuntime: {
+              pollIntervalMs: 10,
+              batchSize: 20,
+              leaseMs: 30_000
+            },
+            devConvenienceRuntime: {
+              enabled: true,
+              pollIntervalMs: 10,
+              timeoutMs: 1_000
+            }
+          } satisfies OrchestratorProviderOverrides)
+        ]
+      }).compile()
+    ).createNestApplication();
+
+    configureOrchestratorHttpApp(devApp);
+    await devApp.init();
+
+    try {
+      const response = await request(devApp.getHttpServer())
+        .post('/v1/dev/parsing/jobs/submit-and-wait')
+        .attach('file', createPdfBuffer(1, 'submit and wait payload'), {
+          filename: 'submit-and-wait.pdf',
+          contentType: 'application/pdf'
+        });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({
+        job: {
+          status: 'COMPLETED',
+          requestedMode: 'STANDARD'
+        },
+        result: {
+          status: 'COMPLETED',
+          payload: expect.stringContaining('submit and wait payload')
+        }
+      });
+    } finally {
+      await devApp.close();
+    }
+  });
+
+  it('returns a timeout error when submit-and-wait does not reach a terminal job state in time', async () => {
+    const timeoutApp = (
+      await Test.createTestingModule({
+        imports: [
+          OrchestratorApiModule.register({
+            clock: new FixedClock(),
+            idGenerator: new IncrementalIdGenerator(),
+            storage: new InMemoryBinaryStorageAdapter(),
+            pageCounter: new SimplePageCounterAdapter(),
+            documents: new InMemoryDocumentRepository(),
+            jobs: new InMemoryProcessingJobRepository(),
+            attempts: new InMemoryJobAttemptRepository(),
+            results: new InMemoryProcessingResultRepository(),
+            artifacts: new InMemoryPageArtifactRepository(),
+            deadLetters: new InMemoryDeadLetterRepository(),
+            audit: new InMemoryAuditRepository(),
+            telemetry: new InMemoryTelemetryEventRepository(),
+            publisher: new InMemoryJobPublisherAdapter(),
+            queuePublicationDispatcherRuntime: {
+              pollIntervalMs: 10,
+              batchSize: 20,
+              leaseMs: 30_000
+            },
+            devConvenienceRuntime: {
+              enabled: true,
+              pollIntervalMs: 5,
+              timeoutMs: 25
+            }
+          } satisfies OrchestratorProviderOverrides)
+        ]
+      }).compile()
+    ).createNestApplication();
+
+    configureOrchestratorHttpApp(timeoutApp);
+    await timeoutApp.init();
+
+    try {
+      const response = await request(timeoutApp.getHttpServer())
+        .post('/v1/dev/parsing/jobs/submit-and-wait')
+        .attach('file', createPdfBuffer(1, 'timeout payload'), {
+          filename: 'timeout.pdf',
+          contentType: 'application/pdf'
+        });
+
+      expect(response.status).toBe(HttpStatus.GATEWAY_TIMEOUT);
+      expect(response.body).toMatchObject({
+        errorCode: 'TIMEOUT',
+        message: 'Processing did not finish before the dev convenience timeout',
+        metadata: {
+          jobId: expect.any(String)
+        }
+      });
+    } finally {
+      await timeoutApp.close();
+    }
+  });
+
+  it('returns a summarized job failure when submit-and-wait reaches FAILED', async () => {
+    const clock = new FixedClock();
+    const idGenerator = new IncrementalIdGenerator();
+    const failingAppJobs = new InMemoryProcessingJobRepository();
+    const failingApp = (
+      await Test.createTestingModule({
+        imports: [
+          OrchestratorApiModule.register({
+            clock,
+            idGenerator,
+            storage: new InMemoryBinaryStorageAdapter(),
+            pageCounter: new SimplePageCounterAdapter(),
+            documents: new InMemoryDocumentRepository(),
+            jobs: failingAppJobs,
+            attempts: new InMemoryJobAttemptRepository(),
+            results: new InMemoryProcessingResultRepository(),
+            artifacts: new InMemoryPageArtifactRepository(),
+            deadLetters: new InMemoryDeadLetterRepository(),
+            audit: new InMemoryAuditRepository(),
+            telemetry: new InMemoryTelemetryEventRepository(),
+            publisher: new FailingJobPublisherAdapter(),
+            queuePublicationDispatcherRuntime: {
+              pollIntervalMs: 10,
+              batchSize: 20,
+              leaseMs: 30_000
+            },
+            devConvenienceRuntime: {
+              enabled: true,
+              pollIntervalMs: 5,
+              timeoutMs: 250
+            }
+          } satisfies OrchestratorProviderOverrides)
+        ]
+      }).compile()
+    ).createNestApplication();
+
+    configureOrchestratorHttpApp(failingApp);
+    await failingApp.init();
+
+    try {
+      const response = await request(failingApp.getHttpServer())
+        .post('/v1/dev/parsing/jobs/submit-and-wait')
+        .attach('file', createPdfBuffer(1, 'failing submit-and-wait'), {
+          filename: 'submit-and-wait-failed.pdf',
+          contentType: 'application/pdf'
+        });
+
+      expect(response.status).toBe(HttpStatus.CONFLICT);
+      expect(response.body).toMatchObject({
+        errorCode: 'TRANSIENT_FAILURE',
+        message: 'Processing job failed before a result became available',
+        metadata: {
+          jobId: expect.any(String),
+          status: 'FAILED'
+        }
+      });
+    } finally {
+      await failingApp.close();
+    }
   });
 
   it('accepts an upload, exposes status and returns the minimal result contract', async () => {
