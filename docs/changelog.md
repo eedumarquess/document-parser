@@ -4,6 +4,43 @@ Todas as mudancas relevantes deste repositorio devem ser registradas aqui.
 
 O formato segue uma adaptacao simples de `Keep a Changelog` e usa as tags de contexto dos commits como apoio para rastreabilidade.
 
+## [2026-04-04] - DX de onboarding da API, Swagger e conveniencias locais
+
+### Added
+
+- `GET /health` na `orchestrator-api`, com resposta minima de liveness para onboarding local.
+- Swagger UI em `/docs` e OpenAPI JSON em `/docs-json`, cobrindo os endpoints HTTP da API com tags de descoberta e headers avancados opcionais.
+- Script `tooling/scripts/manual-smoke.ps1` para smoke local de `upload -> polling -> result`, com fallback para o fixture PDF do repositorio.
+- Wrapper `tooling/scripts/run-manual-smoke.cjs` e atalho `corepack pnpm smoke:local` para executar o smoke com forwarding previsivel de argumentos no Windows.
+- Endpoint dev-only `POST /v1/dev/parsing/jobs/submit-and-wait`, gated por `ENABLE_DEV_CONVENIENCE_ENDPOINTS=true`.
+- Flags documentadas de conveniencia local em `.env.example` e `.env.docker.dev.example`.
+
+### Changed
+
+- `README.md` foi reorganizado para abrir com `Quick Start de 5 minutos`, `.\start-dev.ps1`, `smoke:local`, `/docs` e `/health`, deixando runtime `memory`, headers avancados, replay de DLQ e painel operacional na secao avancada.
+- O onboarding passou a posicionar o runtime `real` como caminho humano recomendado e `memory` como mecanismo interno de teste e suites automatizadas.
+- Os controllers HTTP da `orchestrator-api` passaram a expor metadata Swagger para `Jobs`, `Results`, `Operations`, `Dead Letters` e `System`, sem alterar o wire contract existente.
+- O endpoint HTML `GET /ops/jobs/{jobId}` permaneceu fora da spec OpenAPI e segue documentado apenas como rota avancada.
+
+### Fixed
+
+- O atalho `pnpm smoke:local -- -FilePath ...` deixou de quebrar por forwarding ambiguo de argumentos do runner.
+- Os cenarios E2E da API passaram a cobrir `/health`, `/docs-json`, a ausencia do endpoint dev-only quando desabilitado e os fluxos feliz, timeout e falha do `submit-and-wait`.
+
+### Technical Notes
+
+- O endpoint `submit-and-wait` nao bypassa outbox, fila, worker nem persistencia; ele apenas encapsula o fluxo normal de submit e faz polling interno ate estado terminal ou timeout.
+- `/health` e um liveness simples e nao executa deep checks de `MongoDB`, `RabbitMQ` ou `MinIO`.
+- A validacao desta entrega cobriu `corepack pnpm lint`, `corepack pnpm typecheck`, `corepack pnpm build`, `corepack pnpm test:e2e` e o smoke local via `corepack pnpm smoke:local -- -BaseUrl http://127.0.0.1:1` para validar o caminho de erro amigavel quando a API nao responde.
+
+### Commit Contexts
+
+- `feat(orchestrator-health-swagger)`
+- `feat(orchestrator-dev-submit-and-wait)`
+- `feat(dx-local-smoke-script)`
+- `docs(readme-onboarding)`
+- `docs(changelog)`
+
 ## [2026-04-04] - Reavaliacao tecnica, gate de qualidade e lifecycle de runtime
 
 ### Added
