@@ -36,6 +36,7 @@ import { MinioBinaryStorageAdapter } from '../adapters/out/storage/minio-binary-
 import { InMemoryJobPublisherAdapter } from '../adapters/out/queue/in-memory-job-publisher.adapter';
 import type { OrchestratorProviderOverrides } from '../app.module';
 import { DEFAULT_QUEUE_PUBLICATION_DISPATCHER_RUNTIME } from '../application/services/queue-publication-outbox-dispatcher.service';
+import { DEFAULT_DEV_CONVENIENCE_RUNTIME } from '../application/use-cases/submit-document-and-wait.use-case';
 
 export type OrchestratorRuntimeBootstrap = {
   mode: RuntimeMode;
@@ -69,6 +70,7 @@ export function buildOrchestratorRuntimeBootstrapFromEnv(): OrchestratorRuntimeB
         publisher: new InMemoryJobPublisherAdapter(),
         queuePublicationOutbox: new InMemoryQueuePublicationOutboxRepository(),
         queuePublicationDispatcherRuntime: buildQueuePublicationDispatcherRuntimeFromEnv(),
+        devConvenienceRuntime: buildDevConvenienceRuntimeFromEnv(),
         audit: new InMemoryAuditRepository(),
         unitOfWork: new InMemoryUnitOfWork()
       }
@@ -109,6 +111,7 @@ export function buildOrchestratorRuntimeBootstrapFromEnv(): OrchestratorRuntimeB
         runtimeResources
       ),
       queuePublicationDispatcherRuntime: buildQueuePublicationDispatcherRuntimeFromEnv(),
+      devConvenienceRuntime: buildDevConvenienceRuntimeFromEnv(),
       audit: new MongoAuditRepositoryAdapter(mongoProvider, sessionContext),
       unitOfWork: new MongoUnitOfWorkAdapter(mongoProvider, sessionContext)
     }
@@ -132,6 +135,22 @@ function buildQueuePublicationDispatcherRuntimeFromEnv() {
     leaseMs: parseOptionalNumberEnv(
       'OUTBOX_LEASE_MS',
       DEFAULT_QUEUE_PUBLICATION_DISPATCHER_RUNTIME.leaseMs
+    )
+  };
+}
+
+function buildDevConvenienceRuntimeFromEnv() {
+  const enabled = (process.env.ENABLE_DEV_CONVENIENCE_ENDPOINTS ?? 'false').trim().toLowerCase() === 'true';
+
+  return {
+    enabled,
+    pollIntervalMs: parseOptionalNumberEnv(
+      'DEV_CONVENIENCE_POLL_INTERVAL_MS',
+      DEFAULT_DEV_CONVENIENCE_RUNTIME.pollIntervalMs
+    ),
+    timeoutMs: parseOptionalNumberEnv(
+      'DEV_CONVENIENCE_TIMEOUT_MS',
+      DEFAULT_DEV_CONVENIENCE_RUNTIME.timeoutMs
     )
   };
 }
