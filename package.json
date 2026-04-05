@@ -12,6 +12,7 @@
     "docker:dev:bootstrap": "node tooling/scripts/docker-dev-bootstrap.cjs",
     "docker:dev:api": "node tooling/scripts/docker-dev-runner.cjs api",
     "docker:dev:worker": "node tooling/scripts/docker-dev-runner.cjs worker",
+    "smoke:local": "node tooling/scripts/run-manual-smoke.cjs",
     "lint": "eslint .",
     "typecheck": "tsc -b packages/shared-kernel/tsconfig.json packages/document-processing-domain/tsconfig.json packages/shared-infrastructure/tsconfig.json packages/testkit/tsconfig.json apps/orchestrator-api/tsconfig.json apps/document-processing-worker/tsconfig.json --force --pretty false",
     "test": "node tooling/scripts/run-all-tests.cjs",
